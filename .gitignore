@@ -36,6 +36,8 @@ Desktop.ini
 # 个人简历导出物
 *.pdf
 *.docx
+# 例外：templates/ 下的空白模板 docx（含 {{FIELD}} 标记，无个人数据）
+!templates/**/*.docx
 
 # ===== 依赖与构建（v0.2+ 代码化后启用）=====
 node_modules/
