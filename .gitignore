@@ -1,0 +1,46 @@
+# ===== 操作系统 =====
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# ===== 编辑器 =====
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ===== 临时文件 =====
+~$*
+*.tmp
+*.bak
+
+# ===== 个人简历数据（严禁入库）=====
+# 数据目录已物理隔离在仓库外（../简历库/），以下规则为双保险
+/data/
+/jd/
+/analysis/
+/generated/
+/config/
+
+# 个人照片与证件照（任何位置）
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.bmp
+*.webp
+# 例外：模板/文档所需设计资源若未来需要入库，用 ! 取反
+!templates/**/*.png
+!docs/**/*.png
+
+# 个人简历导出物
+*.pdf
+*.docx
+
+# ===== 依赖与构建（v0.2+ 代码化后启用）=====
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+dist/
+build/
