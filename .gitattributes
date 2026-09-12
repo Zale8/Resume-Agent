@@ -1,0 +1,26 @@
+# 统一换行符，避免 Windows/macOS/Linux 协作时反复出现
+# "LF will be replaced by CRLF" 警告与虚假 diff。
+#
+# 策略：仓库内统一存 LF，检出时 Windows 自动转 CRLF。
+
+* text=auto eol=lf
+
+# 二进制文件不得做换行转换
+*.docx  binary
+*.docm  binary
+*.dotx  binary
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.pdf   binary
+*.zip   binary
+*.pyc   binary
+
+# 明确文本类型
+*.py    text eol=lf
+*.md    text eol=lf
+*.json  text eol=lf
+*.txt   text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf

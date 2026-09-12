@@ -2,6 +2,27 @@
 
 本项目的所有重要变更将记录在此文件中。
 
+## v0.2.4 (2026-09-12) — 仓库整理
+
+### Added
+
+- `.gitattributes`：仓库内统一存 LF、检出转 CRLF，二进制文件（docx/png/jpg/pdf）
+  禁止换行转换。消除 Windows 上反复出现的 `LF will be replaced by CRLF` 警告
+  与虚假 diff
+
+### Changed
+
+- 产品仓库整理完毕：**工作区干净，16 个提交，5.91 MB**
+- 确认零依赖可用后清理了冗余的手工依赖包（`pypdf` + `pymupdf`，57 MB）——
+  核心代码完全不 import 它们，全局环境也已具备，删掉不影响任何功能
+- 清理旧 Git 历史备份（含个人信息的 15 MB `.git` 快照）
+
+### Fixed
+
+- `check_privacy.py --install-hook` 的提示补充了受限环境说明：
+  Git 钩子需 `sh`，无法创建命名管道时会直接失败导致无法提交，
+  此时应改用 `python commit.py`
+
 ## v0.2.3 (2026-09-12)
 
 ### Fixed
