@@ -112,7 +112,8 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         expected = [
             "00_个人信息", "01_教育经历", "02_实习经历", "03_项目经历",
             "04_校园经历", "05_专业技能", "06_求职意向", "07_个人优势",
-            "08_证书奖项", "09_岗位定制简历", "11_岗位JD", "13_JD分析", "99_配置",
+            "08_证书奖项", "09_岗位定制简历", "10_简历母版", "11_岗位JD",
+            "12_投递记录", "13_JD分析", "14_JD结构化分析", "99_配置",
         ]
         for name in expected:
             path = lib / name
@@ -233,11 +234,11 @@ def _next_template_index(tpl_root: Path) -> int:
 # ============================================================================
 
 def cmd_check_library(args: argparse.Namespace) -> int:
-    """校验 11_岗位JD / 13_JD分析 / 09_岗位定制简历 三处的一致性。
+    """校验四处产物的一致性：JD 原文 / JD 结构化分析 / 匹配分析 / 成品。
 
-    为什么需要：AGENT.md 规定了产物命名，但命名相近（`公司_岗位.md` 与
-    `公司_岗位_匹配分析.md`）容易被误认为重复生成，也确实存在「只留了一份」
-    的历史遗留。本命令把不一致显式列出，避免靠人肉比对。
+    为什么需要：文件名相近（`公司_岗位.md` 与 `公司_岗位_匹配分析.md`）容易被
+    误认为重复生成，也确实存在「只留了一份」的历史遗留。本命令把不一致显式
+    列出，避免靠人肉比对。
     """
     try:
         lib = resolve_lib(args.lib)
@@ -246,93 +247,112 @@ def cmd_check_library(args: argparse.Namespace) -> int:
         print(str(exc))
         return 1
 
-    jd_dir = lib / "11_岗位JD"
-    ana_dir = lib / "13_JD分析"
+    stages = [
+        ("JD原文", lib / "11_岗位JD", ""),
+        ("结构化", lib / "14_JD结构化分析", ""),
+        ("匹配分析", lib / "13_JD分析", "_匹配分析"),
+    ]
     resume_dir = lib / "09_岗位定制简历"
 
     head("简历库一致性校验")
     print(f"  简历库：{lib}")
 
-    # ---- 1. 收集岗位（以 13_JD分析 与 11_岗位JD 的并集为准）----
-    def stems(folder: Path) -> dict[str, Path]:
+    def stems(folder: Path, suffix: str = "") -> dict[str, Path]:
         out: dict[str, Path] = {}
         if not folder.is_dir():
             return out
         for f in folder.glob("*.md"):
-            out[f.stem] = f
+            name = f.stem
+            if suffix:
+                if not name.endswith(suffix):
+                    continue
+                name = name[: -len(suffix)]
+            out[name] = f
         return out
 
-    jd_files = stems(jd_dir)
-    ana_files = stems(ana_dir)
+    per_stage: dict[str, dict[str, Path]] = {
+        label: stems(folder, suffix) for label, folder, suffix in stages
+    }
 
-    # 归一：把 _匹配分析 后缀去掉，得到「岗位键」
-    def base_of(stem: str) -> str:
-        return re.sub(r"_匹配分析$", "", stem)
+    all_keys: set[str] = set()
+    for files in per_stage.values():
+        all_keys.update(files)
 
-    positions: dict[str, dict[str, Path]] = {}
-    for stem, path in {**jd_files, **ana_files}.items():
-        positions.setdefault(base_of(stem), {})[stem] = path
+    print(f"\n  发现 {len(all_keys)} 个岗位记录\n")
 
-    print(f"\n  发现 {len(positions)} 个岗位记录\n")
+    header = f"  {'岗位':<40}" + "".join(f"{label:<10}" for label, _, _ in stages) + "成品"
+    print(header)
+    print("  " + "-" * (len(header) + 2))
 
     problems: list[str] = []
-    print(f"  {'岗位':<44} {'JD原文':<7} {'JD分析':<7} {'匹配分析':<8} {'成品':<5}")
-    print("  " + "-" * 76)
+    for key in sorted(all_keys):
+        cells = []
+        for label, _, _ in stages:
+            cells.append("✓" if key in per_stage[label] else "✗")
 
-    for key in sorted(positions):
-        has_jd = key in jd_files
-        has_ana = key in ana_files
-        has_match = f"{key}_匹配分析" in ana_files
+        # 成品：按公司目录找任意 docx。
+        # 放宽匹配的原因：JD 文件名里的「岗位」可能与实际投递岗位不同
+        # （JD 叫「招聘简章」，实际投的是「库管员」），因此不要求岗位名精确相等。
+        has_docx = _has_deliverable(resume_dir, key)
+        cells.append("✓" if has_docx else "✗")
 
-        # 成品：在 09_岗位定制简历 下找。
-        # 放宽匹配：JD 文件名里的「岗位」可能与实际投递岗位不同
-        # （如 JD 叫「招聘简章」，实际投的是「库管员」），因此按公司目录
-        # 找任意产物，而不是要求岗位名精确相等。        has_docx = False
-        parts = key.split("_")
-        if len(parts) >= 3:
-            company = parts[1]
-            company_dir = resume_dir / company
-            if company_dir.is_dir():
-                has_docx = any(company_dir.rglob("*.docx"))
-            else:
-                # 公司名也可能带后缀（如 JD 写「某公司华北某市分公司」，而目录名是「某公司」）
-                for cand in resume_dir.iterdir() if resume_dir.is_dir() else []:
-                    if cand.is_dir() and (cand.name in company or company in cand.name):
-                        if any(cand.rglob("*.docx")):
-                            has_docx = True
-                            break
+        print(f"  {key:<40}" + "".join(f"{c:<10}" for c in cells))
 
-        mark = lambda b: "✓" if b else "✗"      # noqa: E731
-        print(f"  {key:<44} {mark(has_jd):<7} {mark(has_ana):<7} "
-              f"{mark(has_match):<8} {mark(has_docx):<5}")
-
-        if not has_jd:
-            problems.append(f"{key}：缺 JD 原文（11_岗位JD）")
-        if not has_ana:
-            problems.append(f"{key}：缺 JD 结构化分析（13_JD分析/{key}.md）"
-                            " —— 匹配分析里含分析内容时可忽略")
-        if not has_match:
-            problems.append(f"{key}：缺匹配分析（13_JD分析/{key}_匹配分析.md）")
-        if has_ana and not has_match:
-            problems.append(f"{key}：只有 JD 分析、没有匹配分析（还没做匹配）")
+        for (label, folder, _), has in zip(stages, cells):
+            if has == "✗":
+                problems.append(f"{key}：缺{label}（{folder.name}/）")
 
     head("结论")
-    if problems:
-        warn(f"发现 {len(problems)} 处不完整：")
-        for p in problems:
-            print(f"      · {p}")
-        print()
-        print("  说明：这两个文件是**不同阶段**的产物，不是重复：")
-        print(f"      {ana_dir.name}/YYYY-MM-DD_公司_岗位.md"
-              "            → ① JD 要什么（与候选人无关）")
-        print(f"      {ana_dir.name}/YYYY-MM-DD_公司_岗位_匹配分析.md"
-              "      → ② 这个人与它的关系")
-        print("  若某岗位只保留了匹配分析（内容已含 JD 分析要点），可接受，"
-              "但不利于同岗位复用。")
+    if not problems:
+        ok("四处产物齐全且命名规范")
         return 0
 
-    ok("三处产物齐全且命名规范")
+    warn(f"发现 {len(problems)} 处不完整：")
+    for p in problems:
+        print(f"      · {p}")
+    print()
+    print("  说明：这些是**不同阶段**的产物，不是重复生成：")
+    print("      11_岗位JD/YYYY-MM-DD_公司_岗位.md"
+          "              → JD 原文")
+    print("      14_JD结构化分析/YYYY-MM-DD_公司_岗位.md"
+          "       → ① 岗位要什么（与候选人无关，可复用）")
+    print("      13_JD分析/YYYY-MM-DD_公司_岗位_匹配分析.md"
+          "    → ② 这个人与岗位的关系")
+    print("      09_岗位定制简历/公司/岗位/日期/"
+          "                → 成品 DOCX")
+    print()
+    print("  修复建议：")
+    print("      · 缺「结构化」：可用 --jd 重新分析；若匹配分析里已含岗位能力模型，"
+          "可暂不补")
+    print("      · 缺「匹配分析」：执行「这个岗位我匹配吗？」流程")
+    print("      · 缺「成品」：gen.py render 生成")
     return 0
+
+
+def _has_deliverable(resume_dir: Path, key: str) -> bool:
+    """判断某个岗位是否已有成品 docx。
+
+    按公司目录放宽匹配：JD 文件名里的岗位名常与实际投递岗位不同。
+    """
+    if not resume_dir.is_dir():
+        return False
+    parts = key.split("_")
+    if len(parts) < 2:
+        return False
+    company = parts[1]
+
+    direct = resume_dir / company
+    if direct.is_dir() and any(direct.rglob("*.docx")):
+        return True
+
+    # 公司名可能带后缀（JD 写「某公司华北某市分公司」，目录名是「某公司」）
+    for cand in resume_dir.iterdir():
+        if not cand.is_dir():
+            continue
+        if cand.name in company or company in cand.name:
+            if any(cand.rglob("*.docx")):
+                return True
+    return False
 
 
 # ============================================================================
