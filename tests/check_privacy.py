@@ -239,8 +239,85 @@ def collect_findings(repo: Path, terms: list[str]) -> list[Finding]:
                 # 这是用户自己的 git 身份，不算简历数据泄漏 -> 弱提示
                 False,
             ))
-
     return findings
+
+
+def show_identity(repo: Path) -> int:
+    """打印 git 身份与修改建议（供用户自行决定是否脱敏）。
+
+    关键点：必须检查**历史中实际使用过的身份**，而不是 `git config user.email`。
+    曾经的缺陷：只读当前配置，导致漏报历史里真实存在的个人邮箱。
+    配置读取（`git config`）与历史读取（`git log --format=%ae`）是两件事。
+
+    刻意不自动修改：把历史里的身份改成什么（如 GitHub noreply 需要用户名）
+    取决于用户的外部账号，不属于工具能替用户决定的事。
+    """
+    print("=" * 72)
+    print("Git 提交身份")
+    print("=" * 72)
+
+    # ---- 1. 历史中实际使用过的身份 ----
+    raw = git(repo, "log", "--all", "--format=%an\t%ae\t%cn\t%ce")
+    authors: dict[str, set[str]] = {}
+    committers: dict[str, set[str]] = {}
+    for line in raw.splitlines():
+        parts = line.split("\t")
+        if len(parts) != 4:
+            continue
+        an, ae, cn, ce = (p.strip() for p in parts)
+        if ae:
+            authors.setdefault(ae, set()).add(an)
+        if ce:
+            committers.setdefault(ce, set()).add(cn)
+
+    emails = set(authors) | set(committers)
+    personal = sorted(e for e in emails if email_is_personal(e))
+
+    print("历史中使用过的邮箱：")
+    if not emails:
+        print("  （无提交）")
+    for email in sorted(emails):
+        names = ", ".join(sorted(authors.get(email, set()) | committers.get(email, set())))
+        flag = "  ⚠️ 个人邮箱" if email_is_personal(email) else ""
+        print(f"  {email:<34} ({names}){flag}")
+    print()
+
+    # ---- 2. 当前配置（决定后续新提交用什么身份）----
+    name = git(repo, "config", "user.name").strip() or "（未设置）"
+    email = git(repo, "config", "user.email").strip() or "（未设置）"
+    scope = "本地(config --local)"
+    if not git(repo, "config", "--local", "user.email").strip():
+        scope = "继承自全局(config --global)"
+    print("后续新提交将使用：")
+    print(f"  user.name  : {name}")
+    print(f"  user.email : {email}   [{scope}]")
+    print()
+
+    # ---- 3. 结论与建议 ----
+    if personal:
+        print(f"⚠️  历史中有 {len(personal)} 个个人邮箱：{', '.join(personal)}")
+        print("    若此仓库将来推送到公开远程，这些邮箱会随提交一起公开，可能被爬虫收集。")
+        print("    两种处理方式：")
+        print()
+        print("    A. 只影响后续提交（简单，不改历史）：")
+        print("         git config user.email \"你的用户名@users.noreply.github.com\"")
+        print()
+        print("    B. 连历史一起清除（需重写历史，会改变所有提交哈希）：")
+        print("         git filter-branch -f --env-filter '")
+        print("           export GIT_AUTHOR_EMAIL=\"新邮箱\" GIT_COMMITTER_EMAIL=\"新邮箱\"' -- --all")
+        print()
+        if email_is_personal(email):
+            print("    注意：当前配置**也是**个人邮箱，所以后续提交同样会带上它。")
+        else:
+            print("    ✅ 当前配置已不是个人邮箱，后续新提交不会带上它。")
+    else:
+        print("✅ 历史与当前配置均未使用个人邮箱。")
+    print()
+
+    remotes = git(repo, "remote", "-v").strip()
+    print("已配置的远程：")
+    print(f"  {remotes}" if remotes else "  （无。当前仅本地使用，历史重写无协作影响）")
+    return 0
 
 
 def install_hook(repo: Path) -> int:
@@ -280,6 +357,8 @@ def main() -> int:
     ap.add_argument("--repo", help="产品仓库路径（默认自动向上查找）")
     ap.add_argument("--terms-file", help="自定义敏感词清单（每行一个词）")
     ap.add_argument("--install-hook", action="store_true", help="安装 pre-commit 守卫")
+    ap.add_argument("--show-identity", action="store_true",
+                    help="查看 git 提交身份与脱敏建议")
     args = ap.parse_args()
 
     if args.repo:
@@ -294,6 +373,9 @@ def main() -> int:
     if not (repo / ".git").exists():
         print(f"❌ 不是 git 仓库：{repo}")
         return 1
+
+    if args.show_identity:
+        return show_identity(repo)
 
     if args.install_hook:
         return install_hook(repo)
