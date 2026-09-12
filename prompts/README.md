@@ -6,20 +6,26 @@
 
 存放可复用的 Agent 系统提示词、角色提示词、任务提示词模板。
 
-## 内容规划
+## 内容
 
-| 文件 | 说明 |
-|---|---|
-| `system_prompt.md` | 简历助手主系统提示词（后续从 AGENT.md 沉淀） |
-| `jd_analyst.md` | JD 结构化分析专家提示词 |
-| `matcher.md` | 岗位匹配分析专家提示词 |
-| `resume_writer.md` | 定向简历撰写专家提示词 |
-| `expression_optimizer.md` | 经历表达优化专家提示词 |
+| 文件 | 说明 | 状态 |
+|---|---|---|
+| `jd_analyst.md` | JD 结构化分析专家提示词：提取基础信息、工作职责、任职要求、必备技能、加分项、工具要求、关键词，构建 7 维岗位能力模型 | 已完成 |
+| `matcher.md` | 岗位匹配分析专家提示词：逐项匹配（Strong/Partial/Gap/Transferable）、维度汇总、策略建议（突出/弱化/删除/补充）、综合评分 | 已完成 |
+| `resume_writer.md` | 定向简历撰写专家提示词：6 阶段生成流程（读取分析 → 内容筛选 → 三层优化 → 结构组织 → 长度控制 → 产物输出），输出 resume.md + generation_notes.md | 已完成 |
+| `system_prompt.md` | 简历助手主系统提示词（后续从 AGENT.md 沉淀） | 待编写 |
+| `expression_optimizer.md` | 经历表达优化专家提示词：事实提取 → 分类判断 → Level 2 专业表达优化（STAR/PAR） → Level 3 岗位定制（按 JD 调整重点），输出可直接保存到简历库的三层结构 | 已完成 |
 
-## MVP v0.1 状态
+## 使用方式
 
-核心行为规范统一维护在根目录 [AGENT.md](../AGENT.md)，本目录暂不拆分，避免双源维护。
-当某段提示词稳定复用时，再沉淀到本目录。
+每个提示词文件是独立的系统提示词，按需加载：
+
+1. 用户提供 JD → 加载 `jd_analyst.md` → 输出结构化分析
+2. 用户要求匹配分析 → 加载 `matcher.md` + JD 分析结果 + 简历库数据 → 输出匹配报告
+3. 用户要求优化某段经历 → 加载 `expression_optimizer.md` + 用户原始描述 + （可选）JD 分析 → 输出三层结构化经历
+4. 用户要求生成简历 → 加载 `resume_writer.md` + JD 分析 + 匹配报告 + 简历库数据 + 用户偏好 + 模板信息 → 输出 resume.md + generation_notes.md
+
+提示词之间不互相依赖，通过共享的简历库数据串联流程。
 
 ## 红线
 

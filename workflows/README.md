@@ -8,13 +8,17 @@
 | 工作流 | 规范位置 |
 |---|---|
 | 信息录入与分类 | [AGENT.md §三](../AGENT.md) 信息分类规则 |
-| 简历内容三层体系（事实/表达/定制） | [AGENT.md §二](../AGENT.md) |
-| JD 处理流程（保存→分析→能力模型） | [AGENT.md §四](../AGENT.md) |
-| JD 匹配分析（Strong/Partial/Gap/Transferable） | [AGENT.md §五](../AGENT.md) |
-| 定向简历生成（13步流程） | [AGENT.md §六](../AGENT.md) |
-| 经历相关性分级（Highly Relevant → Irrelevant） | [AGENT.md §六](../AGENT.md) |
-| 设计风格系统（自然语言 → 结构化参数） | [AGENT.md §七](../AGENT.md) |
-| 完成后自检（8项清单） | [AGENT.md §八](../AGENT.md) |
+| 简历内容三层体系（事实/表达/定制） | [AGENT.md §一](../AGENT.md) 第八条 / [AGENT.md §四](../AGENT.md) 第 18 条 |
+| 数据与 Git 管理规则 | [AGENT.md §二](../AGENT.md) |
+| JD 处理流程（保存→分析→能力模型） | [AGENT.md §七](../AGENT.md) |
+| JD 匹配分析（Strong/Partial/Gap/Transferable） | [AGENT.md §七](../AGENT.md) |
+| 定向简历生成（严格按序流程） | [AGENT.md §六](../AGENT.md) |
+| 经历相关性分级（Highly Relevant → Irrelevant） | [AGENT.md §三](../AGENT.md) 第 13 条 |
+| 设计风格系统（自然语言 → 结构化参数） | [AGENT.md §十一](../AGENT.md) |
+| **渲染层实现规范（内容 → DOCX）** | [AGENT.md §十四](../AGENT.md) + [agent_entry.md §6](../agent_entry.md) |
+| 完成后自检（11 项清单） | [AGENT.md §九](../AGENT.md) |
+
+> 面向 AI 的可执行入口是 [agent_entry.md](../agent_entry.md)（自包含，无需读其他文件即可开工）。
 
 ## 后续规划
 

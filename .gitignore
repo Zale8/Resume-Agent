@@ -39,10 +39,16 @@ Desktop.ini
 # 例外：templates/ 下的空白模板 docx（含 {{FIELD}} 标记，无个人数据）
 !templates/**/*.docx
 
-# ===== 依赖与构建（v0.2+ 代码化后启用）=====
+# ===== 依赖与构建 =====
 node_modules/
 __pycache__/
 *.pyc
 .venv/
 dist/
 build/
+
+# ===== 渲染产物（默认落在仓库外，此处为兜底）=====
+# 未指定简历库时的降级输出目录
+_output/
+# 渲染时自动产出的字段快照（可能含个人数据）
+*.fields.json

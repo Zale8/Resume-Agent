@@ -152,6 +152,8 @@ def load_personal_data(resume_lib_dir) -> dict:
             "projects": [{name, type, period, role, results, level3_versions}],
             "skills": {category: {tools, proficiency}},
             "campus": [{role, period, description}],
+            "certificates": [{category, name, remark, source_file}],
+            "job_intent": {identity, arrival, cities, directions, source_file},
         }
     """
     lib = Path(resume_lib_dir)
@@ -162,6 +164,8 @@ def load_personal_data(resume_lib_dir) -> dict:
         "projects": [],
         "skills": {},
         "campus": [],
+        "certificates": [],
+        "job_intent": {},
         "self_evaluation": {},
     }
 
@@ -217,26 +221,6 @@ def load_personal_data(resume_lib_dir) -> dict:
         for md_file in sorted(exp_dir.glob("*.md")):
             lines = _read_md(md_file)
             fields = _parse_md_table(lines)
-            # 跳过校园经历文件（它不是实习）
-            if "校园经历" in md_file.name or "学生会" in md_file.name:
-                # 校园经历从 Level 1 第一条提取角色
-                level1_section = _parse_section(lines, "原始事实")
-                level1_bullets = _parse_bullet_list(level1_section)
-                role = None
-                for b in level1_bullets:
-                    if b.startswith("职务："):
-                        role = b.replace("职务：", "").strip()
-                        break
-                # 校园经历取 Level 2 表达层
-                level2_section = _parse_section(lines, "专业表达层")
-                level2_bullets = _parse_bullet_list(level2_section)
-                data["campus"].append({
-                    "role": role,
-                    "period": fields.get("起止时间") or fields.get("时间"),
-                    "level2_expressions": level2_bullets,
-                    "source_file": md_file.name,
-                })
-                continue
             level1 = _parse_bullet_list(_parse_section(lines, "原始事实"))
             level2 = _parse_bullet_list(_parse_section(lines, "专业表达层"))
             level3 = _parse_level3_sections(lines)
@@ -273,8 +257,35 @@ def load_personal_data(resume_lib_dir) -> dict:
                 "source_file": md_file.name,
             })
 
-    # ===== 04_专业技能 =====
-    skill_dir = lib / "04_专业技能"
+    # ===== 04_校园经历 =====
+    campus_dir = lib / "04_校园经历"
+    if campus_dir.exists():
+        for md_file in sorted(campus_dir.glob("*.md")):
+            lines = _read_md(md_file)
+            # 标题取文件 H1（如「# 校园经历 - 班级体育委员 / 文体活动组织」）
+            title = None
+            for line in lines:
+                if line.strip().startswith("# "):
+                    title = line.strip()[2:].strip()
+                    break
+            # 职务类校园经历从 Level 1「职务：」提取角色
+            level1_bullets = _parse_bullet_list(_parse_section(lines, "原始事实"))
+            role = None
+            for b in level1_bullets:
+                if b.startswith("职务："):
+                    role = b.replace("职务：", "").strip()
+                    break
+            # 校园经历取 Level 2 专业表达层
+            level2_bullets = _parse_bullet_list(_parse_section(lines, "专业表达层"))
+            data["campus"].append({
+                "title": title,
+                "role": role,
+                "level2_expressions": level2_bullets,
+                "source_file": md_file.name,
+            })
+
+    # ===== 05_专业技能 =====
+    skill_dir = lib / "05_专业技能"
     if skill_dir.exists():
         for md_file in sorted(skill_dir.glob("*.md")):
             lines = _read_md(md_file)
@@ -288,8 +299,8 @@ def load_personal_data(resume_lib_dir) -> dict:
                 "source_file": md_file.name,
             }
 
-    # ===== 06_个人优势 =====
-    eval_dir = lib / "06_个人优势"
+    # ===== 07_个人优势 =====
+    eval_dir = lib / "07_个人优势"
     if eval_dir.exists():
         for md_file in sorted(eval_dir.glob("*.md")):
             lines = _read_md(md_file)
@@ -303,6 +314,76 @@ def load_personal_data(resume_lib_dir) -> dict:
             adv_section = _parse_section(lines, "有事实支撑")
             data["self_evaluation"]["advantages"] = _parse_md_table(adv_section)
             data["self_evaluation"]["source_file"] = md_file.name
+
+    # ===== 08_证书奖项 =====
+    cert_dir = lib / "08_证书奖项"
+    if cert_dir.exists():
+        for md_file in sorted(cert_dir.glob("*.md")):
+            lines = _read_md(md_file)
+            in_table = False
+            for line in lines:
+                stripped = line.strip()
+                if not stripped.startswith("|"):
+                    continue
+                if re.match(r"^\|[-: |]+\|$", stripped):
+                    in_table = True
+                    continue
+                if stripped.startswith("| 类别") or stripped.startswith("|类别"):
+                    in_table = True
+                    continue
+                if not in_table:
+                    continue
+                cells = [c.strip() for c in stripped.strip("|").split("|")]
+                if len(cells) >= 2:
+                    cat = cells[0].strip()
+                    name = cells[1].strip()
+                    remark = cells[2].strip() if len(cells) >= 3 else ""
+                    if name and name != "待补充":
+                        data["certificates"].append({
+                            "category": cat,
+                            "name": name,
+                            "remark": remark,
+                            "source_file": md_file.name,
+                        })
+
+    # ===== 06_求职意向 =====
+    intent_dir = lib / "06_求职意向"
+    if intent_dir.exists():
+        for md_file in sorted(intent_dir.glob("*.md")):
+            lines = _read_md(md_file)
+            fields = _parse_md_table(lines)
+            data["job_intent"]["identity"] = fields.get("求职身份")
+            data["job_intent"]["arrival"] = fields.get("到岗时间")
+            data["job_intent"]["source_file"] = md_file.name
+            # 目标城市（从列表项提取）
+            city_section = _parse_section(lines, "目标城市")
+            cities = _parse_bullet_list(city_section)
+            data["job_intent"]["cities"] = cities
+            # 求职方向（从方向表格提取）
+            direction_items = []
+            in_direction_table = False
+            for line in lines:
+                stripped = line.strip()
+                if "求职方向" in stripped and stripped.startswith("##"):
+                    in_direction_table = True
+                    continue
+                if in_direction_table and stripped.startswith("##"):
+                    break
+                if in_direction_table and stripped.startswith("|"):
+                    if re.match(r"^\|[-: |]+\|$", stripped):
+                        continue
+                    if stripped.startswith("| #") or stripped.startswith("|#"):
+                        continue
+                    cells = [c.strip() for c in stripped.strip("|").split("|")]
+                    if len(cells) >= 3:
+                        direction = cells[1].strip()
+                        dtype = cells[2].strip()
+                        if direction and direction != "方向":
+                            direction_items.append({
+                                "direction": direction,
+                                "type": dtype,
+                            })
+            data["job_intent"]["directions"] = direction_items
 
     return data
 
