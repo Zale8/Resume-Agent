@@ -190,6 +190,9 @@ class MapReport:
         self.slot_summary: Dict[str, str] = {}   # 来源 -> "用了 2 / 共 4"
         self.supplemented: Dict[str, str] = {}
         self.unmapped_fields: List[str] = []
+        # 内容层声明了、但当前模板没有对应字段的键（会被静默丢弃）
+        self.unknown_fields: List[str] = []
+        self.unknown_values: Dict[str, str] = {}
         self.section_summary: Dict[str, int] = {}
 
     @property
@@ -202,6 +205,8 @@ class MapReport:
             "slot_summary": dict(self.slot_summary),
             "supplemented": dict(self.supplemented),
             "unmapped_fields": list(self.unmapped_fields),
+            "unknown_fields": list(self.unknown_fields),
+            "unknown_values": dict(self.unknown_values),
             "section_summary": dict(self.section_summary),
         }
 
@@ -213,6 +218,81 @@ def _clean(text: str) -> str:
     text = re.sub(r"\*(.+?)\*", r"\1", text)
     text = re.sub(r"`(.+?)`", r"\1", text)
     return re.sub(r"\s+", " ", text).strip()
+
+
+# H1 里常见的文档标题前缀（不是姓名）
+_TITLE_PREFIXES = (
+    "简历内容", "简历", "个人简历", "中文简历", "求职简历",
+    "Resume", "CV",
+)
+
+# 姓名的合理长度（CJK 2~4 字，英文名最多 40 个字符）
+_MAX_NAME_LEN = 40
+
+
+def _looks_like_name(text: str) -> bool:
+    """判断一段文本是否像人名。
+
+    真实 resume.md 的 H1 有两种写法，必须区分：
+        # 张三 - 产品经理          -> 姓名 + 意向
+        # 简历内容：张三 → 某公司 - 岗位  -> 文档标题，姓名藏在里面
+    曾经的缺陷：把整串文档标题当成姓名，导致文件名叫
+    「简历内容：张三 → 某公司 - 岗位_某公司_岗位.docx」。
+    """
+    t = text.strip()
+    if not t or len(t) > _MAX_NAME_LEN:
+        return False
+    if any(t.startswith(p) for p in _TITLE_PREFIXES):
+        return False
+    # 含箭号/冒号/竖线/斜杠等结构符号 -> 是标题而非姓名
+    if re.search(r"[→:：|｜/\\]", t):
+        return False
+    # CJK 姓名通常 2~4 字且不含空格
+    if re.fullmatch(r"[\u4e00-\u9fa5]{2,4}", t):
+        return True
+    # 英文名：允许字母、空格、点、连字符
+    if re.fullmatch(r"[A-Za-z][A-Za-z .'\-]{1,38}", t):
+        return True
+    return False
+
+
+def _split_title(title: str) -> Tuple[Optional[str], Optional[str]]:
+    """从 H1 标题里拆出 (姓名, 求职意向)。
+
+    兼容：
+        '张三 - 产品经理'
+        '张三 | 产品经理'
+        '简历内容：张三 → 某公司 - AI 产品运营实习生'
+        '个人简历 张三'
+    拆不出姓名时返回 (None, ...)，绝不把整串标题当姓名。
+    """
+    text = title.strip()
+
+    # 去掉「简历内容：」「简历：」等前缀
+    text = re.sub(r"^(?:" + "|".join(_TITLE_PREFIXES) + r")\s*[:：]?\s*", "", text)
+
+    # 先按箭号切：箭号左侧是「姓名」，右侧是「公司 - 岗位」
+    if "→" in text:
+        left, _, right = text.partition("→")
+        name = left.strip()
+        obj = right.strip() or None
+        # 右侧可能还带 "- 岗位"，整体作为意向描述即可
+        return (name if _looks_like_name(name) else None, obj)
+
+    # 常规：按 - / | 切成「姓名」+「意向」
+    parts = re.split(r"\s*[-–—|｜]\s*", text, maxsplit=1)
+    head = parts[0].strip()
+    tail = parts[1].strip() if len(parts) > 1 else None
+
+    if _looks_like_name(head):
+        return (head, tail or None)
+
+    # 头部不像姓名（如「个人简历 张三」）：在里面找第一个像姓名的片段
+    for token in re.split(r"[\s,，、]+", head):
+        if _looks_like_name(token):
+            return (token, tail or None)
+
+    return (None, tail or None)
 
 
 def _split_pipe(text: str) -> List[str]:
@@ -242,10 +322,10 @@ def parse_resume_md(text: str) -> ParsedResume:
         i += 1
     if i < len(lines) and lines[i].lstrip().startswith("# "):
         title = _clean(lines[i][2:])
-        parts = re.split(r"\s*[-–—]\s*", title, maxsplit=1)
-        r.name = parts[0].strip() or None
-        if len(parts) > 1:
-            r.obj = parts[1].strip() or None
+        name, obj = _split_title(title)
+        r.name = name
+        if obj:
+            r.obj = obj
         i += 1
 
     # 2) 头部若干行：加粗行 -> 学校信息；求职意向行 -> OBJ；blockquote -> 个人简介
@@ -757,39 +837,51 @@ def _fill_from_school_line(r: ParsedResume) -> None:
 # ============================================================================
 
 def extract_inline_fields(text: str) -> Dict[str, str]:
-    """提取 resume.md 中形如：
+    """提取 resume.md 中「字段名 -> 值」的表格行。
 
-        ## 模板字段
-        | 字段 | 值 |
-        |---|---|
-        | NAME | 张三 |
+    真实的 resume.md 有两种写法，都必须支持：
+
+        写法 A：集中在一节里
+            ## 模板字段
+            | 字段 | 值 |
+            |---|---|
+            | NAME | 张三 |
+
+        写法 B：分散在各章节里（更常见，因为可读性更好）
+            ## 个人信息
+            | 字段 | 值 |
+            |------|-----|
+            | NAME | 张三 |
+            ## 教育经历
+            | 字段 | 值 |
+            |------|-----|
+            | SCH | 某大学 |
+
+    曾经的缺陷：只在「模板字段 / 字段映射」标题下扫描表格，导致写法 B
+    提取到 0 项，渲染器退回章节解析后大量字段丢失。
+
+    判定标准只有一个：**表格首列是大写字段名**（NAME / W1R1 / SCH…），
+    与所在章节标题无关。这样两种写法都能覆盖，且不会把普通表格误当字段表。
     """
-    lines = text.splitlines()
     fields: Dict[str, str] = {}
-    in_block = False
-    for line in lines:
+    for line in text.splitlines():
         stripped = line.strip()
-        if stripped.startswith("## "):
-            heading = _clean(stripped[3:])
-            in_block = ("模板字段" in heading) or ("字段映射" in heading)
-            continue
-        if not in_block:
-            continue
         if not stripped.startswith("|"):
             continue
-        if re.match(r"^\|[-: |]+\|$", stripped):
+        if re.match(r"^\|[-: |]+\|$", stripped):        # 表头分隔行
             continue
         cells = [c.strip() for c in stripped.strip("|").split("|")]
         if len(cells) < 2:
             continue
         key = _clean(cells[0])
         value = _clean(cells[1])
-        if key in ("字段", "模板字段", "Field") or not key:
-            continue
-        if value in ("", "值", "{值}"):
-            continue
-        if re.fullmatch(r"[A-Z][A-Z0-9_]*", key):
-            fields[key] = value
+        if not re.fullmatch(r"[A-Z][A-Z0-9_]*", key):
+            continue                                     # 首列不是字段名
+        if not value or value in ("值", "{值}"):
+            continue                                     # 表头行
+        if _is_placeholder(value):
+            continue                                     # 「待补充」不写入
+        fields[key] = value
     return fields
 
 
@@ -1304,7 +1396,7 @@ def build_fields(
             raise FileNotFoundError(f"resume.md 不存在：{resume_md}")
         text = resume_md.read_text(encoding="utf-8")
 
-        # L2
+        # L2：内嵌字段表（优先级高于章节解析）
         inline = extract_inline_fields(text)
         if inline:
             for k, v in inline.items():
@@ -1312,17 +1404,21 @@ def build_fields(
             source_note = (source_note + " + " if source_note else "") + \
                 f"L2 内嵌字段表（{len(inline)} 项）"
 
-        # L3
-        if not values:
-            parsed = parse_resume_md(text)
-            mapped, _ = map_to_fields(parsed, template_fields, rep)
-            values.update(mapped)
-            source_note = f"L3 章节结构解析（{len(mapped)} 项）"
-        elif source_note.startswith("L1"):
-            parsed = parse_resume_md(text)
-            mapped, _ = map_to_fields(parsed, template_fields, rep)
-            for k, v in mapped.items():
-                values.setdefault(k, v)
+        # L3：章节结构解析 —— 始终执行，作为 L1/L2 的**补漏**而非替代。
+        #
+        # 曾经的缺陷：写成 `if not values:`，即「有内联表就不解析章节」。
+        # 但内联表往往只写了部分字段（如只写个人信息 + 教育），
+        # 剩下 17 个字段就白白空着。两者是互补关系，不是二选一。
+        parsed = parse_resume_md(text)
+        mapped, _ = map_to_fields(parsed, template_fields, rep)
+        added = 0
+        for k, v in mapped.items():
+            if k not in values:
+                values[k] = v
+                added += 1
+        if mapped:
+            source_note = (source_note + " + " if source_note else "") + \
+                f"L3 章节解析补漏（{added} 项）"
 
     if not values:
         raise ValueError(
@@ -1332,8 +1428,18 @@ def build_fields(
             "  3) 或直接在 resume.md 中加入「## 模板字段」表格。"
         )
 
-    # 只保留模板需要的字段（多余键会让报告噪音很大）
-    filtered = {k: v for k, v in values.items() if k in set(template_fields)}
+    # 只保留模板需要的字段（多余键会让报告噪音很大），
+    # 但必须**报告**被丢弃的键 —— 否则内容层写了字段、模板却没有对应位置，
+    # 用户会以为已经写进去了（真实案例：resume.md 声明 SK1/SK2/SK3，
+    # 而 template_02 根本没有技能字段，三个技能被静默丢弃）。
+    allowed = set(template_fields)
+    unknown = sorted(k for k in values if k not in allowed)
+    rep.unknown_fields = unknown
+    # 同时留存这些键的原值：调用方过滤后拿不到它们，报告里需要显示
+    # 「到底丢了什么内容」才有意义
+    rep.unknown_values = {k: values[k] for k in unknown}
+
+    filtered = {k: v for k, v in values.items() if k in allowed}
 
     # ---- 可选：用简历库补齐 resume.md 没写到的标量字段 ----
     supplemented: Dict[str, str] = {}

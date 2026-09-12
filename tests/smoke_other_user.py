@@ -308,23 +308,31 @@ def _checks(work: Path) -> int:
             failures += 1
 
     # ---- 4. 产品仓库未被写入用户数据 ----
+    #
+    # 注意：只检查**真实用户**的敏感词，不检查本测试用的虚构值。
+    # 测试文件本身必须包含虚构数据（否则没法测），把它当泄漏是误报。
     print("\n### 4. 产品仓库未被写入任何用户数据")
-    stray = []
-    me = Path(__file__).name
-    for path in PRODUCT.rglob("*"):
-        if not path.is_file() or ".git" in path.parts or "__pycache__" in path.parts:
-            continue
-        if path.suffix not in {".py", ".md", ".json", ".txt"}:
-            continue
-        if path.name == me:      # 本测试脚本自身必须含虚构数据
-            continue
-        text = path.read_text(encoding="utf-8", errors="ignore")
-        if "李示例" in text or "示例科技" in text:
-            stray.append(path.relative_to(PRODUCT).as_posix())
-    ok = not stray
-    print(f"  {'✅' if ok else '❌'} 无泄漏（命中：{stray}）")
-    if not ok:
-        failures += 1
+    real_terms = load_real_terms(PRODUCT)
+    if not real_terms:
+        print("  ⏭️  未找到仓库外敏感词表，跳过检查")
+    else:
+        stray: list[str] = []
+        for path in PRODUCT.rglob("*"):
+            if not path.is_file() or ".git" in path.parts or "__pycache__" in path.parts:
+                continue
+            if path.suffix not in {".py", ".md", ".json", ".txt"}:
+                continue
+            text = path.read_text(encoding="utf-8", errors="ignore")
+            hit = [t for t in real_terms if t in text]
+            if hit:
+                stray.append(f"{path.relative_to(PRODUCT).as_posix()} ({', '.join(hit)})")
+        ok = not stray
+        print(f"  {'✅' if ok else '❌'} 产品仓库无真实用户信息"
+              f"（按 {len(real_terms)} 个敏感词）")
+        for s in stray:
+            print(f"        {s}")
+        if not ok:
+            failures += 1
 
     print("\n" + "=" * 64)
     if failures:

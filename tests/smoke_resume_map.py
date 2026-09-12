@@ -88,6 +88,89 @@ def test_placeholder_filtering() -> None:
         check(f"_is_placeholder({text!r})", rm._is_placeholder(text), False)
 
 
+def test_inline_fields_any_section() -> None:
+    """内联字段表可能分散在各章节下，不只在「## 模板字段」里。
+
+    真实案例：一份 resume.md 把字段表写在
+        ## 个人信息 / | NAME | 张三 |
+        ## 教育经历 / | SCH | 某大学 |
+    旧实现只在「模板字段 / 字段映射」标题下扫描，提取到 0 项，
+    渲染器退回章节解析后大量字段丢失（30/32 掉到 15/32）。
+    """
+    print("\n### 3b. 内联字段表跨章节提取")
+    text = """# 简历内容：张三 → 某公司 - 产品经理
+
+> 生成日期：2026-01-01
+
+## 个人信息
+
+| 字段 | 值 |
+|------|-----|
+| NAME | 张三 |
+| TEL | 13900000001 |
+| HT | 待补充 |
+
+## 教育经历
+
+| 字段 | 值 |
+|------|-----|
+| SCH | 某大学 |
+| MAJ | 软件工程 |
+
+## 技能
+
+| 字段 | 值 | 说明 |
+|------|-----|------|
+| SK1 | Python | JD 要求 |
+| SK2 | SQL | JD 加分 |
+"""
+    fields = rm.extract_inline_fields(text)
+    check("跨章节提取 NAME", fields.get("NAME"), "张三")
+    check("跨章节提取 TEL", fields.get("TEL"), "13900000001")
+    check("跨章节提取 SCH", fields.get("SCH"), "某大学")
+    check("跨章节提取 SK1", fields.get("SK1"), "Python")
+    check("三列表格取第二列", fields.get("SK2"), "SQL")
+    check("「待补充」不写入", "HT" in fields, False)
+    check("字段总数", len(fields), 6)
+
+    # 普通表格（首列不是大写字段名）不应被误当字段表
+    plain = """## 某章节
+
+| 项目 | 说明 |
+|---|---|
+| 姓名 | 张三 |
+| 电话 | 139 |
+"""
+    check("普通表格不误判", rm.extract_inline_fields(plain), {})
+
+
+def test_title_name_parsing() -> None:
+    """H1 可能是文档标题而非「姓名 - 岗位」，不能把整串当姓名。
+
+    真实案例：H1 为「简历内容：<某人> → 某公司 - 岗位」时，
+    旧实现把整串当姓名，产出文件名叫
+    「简历内容：<某人> → 某公司 - 岗位_某公司_岗位.docx」。
+    """
+    print("\n### 3c. H1 姓名解析")
+    cases = [
+        ("张三 - 产品经理", ("张三", "产品经理")),
+        ("张三 | 后端开发工程师", ("张三", "后端开发工程师")),
+        ("简历内容：李四 → 某公司 - AI 运营实习生", ("李四", "某公司 - AI 运营实习生")),
+        ("个人简历 王五", ("王五", None)),
+        ("李示例 - 后端开发工程师", ("李示例", "后端开发工程师")),
+    ]
+    for title, expected in cases:
+        check(f"_split_title({title!r})", rm._split_title(title), expected)
+
+    # 纯文档标题（无姓名）不应编造姓名
+    name, _ = rm._split_title("个人简历")
+    check("无姓名时返回 None", name, None)
+
+    # 端到端：解析整份文档，姓名必须正确
+    p = rm.parse_resume_md(SAMPLE)
+    check("SAMPLE 姓名", p.name, "张三")
+
+
 # ============================================================================
 # 4. 章节结构解析
 # ============================================================================
@@ -356,6 +439,8 @@ def main() -> int:
     test_split_role_from_org()
     test_condense_role()
     test_placeholder_filtering()
+    test_inline_fields_any_section()
+    test_title_name_parsing()
     test_parse_sections()
     test_extract_seq_value()
     test_slot_drop_reporting()

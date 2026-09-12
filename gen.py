@@ -361,10 +361,17 @@ def cmd_render(args: argparse.Namespace) -> int:
     print(f"  映射策略    : {source_note}")
     print(f"  已映射字段  : {len(values)} / {len(template_fields)}")
 
-    # 姓名：优先命令行，其次从 resume.md 解析，最后回落
+    # 姓名：优先命令行，其次 resume.md 解析，最后从简历库个人信息兜底
     if not args.name and parsed and parsed.name:
         args.name = parsed.name
         print(f"  姓名（自动）: {args.name}")
+    if not args.name and library_data:
+        personal = library_data.get("personal") or {}
+        if isinstance(personal, dict) and personal.get("name"):
+            args.name = str(personal["name"]).strip()
+            print(f"  姓名（库兜底）: {args.name}")
+    if not args.name:
+        print("  姓名        : 未识别（将用「简历」作为文件名，可用 --name 指定）")
 
     if map_report.supplemented:
         print(f"  库补齐明细  : {len(map_report.supplemented)} 项"
@@ -392,6 +399,22 @@ def cmd_render(args: argparse.Namespace) -> int:
         print("        a) 让 AI 在 resume.md 中补上对应章节（最佳，内容可针对 JD 定制）；")
         print("        b) 加 --supplement 用简历库事实层补齐客观信息（TEL/EML/证书等）；")
         print("        c) 在 resume.fields.json 中直接给这些键赋值后加 --fields 重跑。")
+
+    # 内容层写了字段、但当前模板没有对应位置 -> 会被丢弃，必须报警
+    if map_report.unknown_fields:
+        warn(f"{len(map_report.unknown_fields)} 个字段在当前模板中没有对应位置，"
+             "已丢弃：")
+        for key in map_report.unknown_fields[:10]:
+            raw = str(map_report.unknown_values.get(key, "") or "")
+            shown = raw if len(raw) <= 40 else raw[:40] + "…"
+            print(f"      {key} = {shown!r}")
+        if len(map_report.unknown_fields) > 10:
+            print(f"      …另有 {len(map_report.unknown_fields) - 10} 个")
+        print(f"      当前模板 {tpl_docx.parent.name} 的字段："
+              f"{', '.join(template_fields)}")
+        print("      处理方式：")
+        print("        a) 换用包含这些字段的模板（见 python gen.py list-templates）；")
+        print("        b) 或把这些内容并入模板已有的字段（如把技能写进自我评价）")
 
     # ---- 6. 证件照 ----
     photo: Path | None = None
