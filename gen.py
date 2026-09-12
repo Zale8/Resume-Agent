@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as _dt
+import re
 import sys
 from pathlib import Path
 
@@ -225,6 +226,113 @@ def _next_template_index(tpl_root: Path) -> int:
         except (IndexError, ValueError):
             continue
     return max(existing, default=0) + 1
+
+
+# ============================================================================
+# check-library — 简历库一致性校验
+# ============================================================================
+
+def cmd_check_library(args: argparse.Namespace) -> int:
+    """校验 11_岗位JD / 13_JD分析 / 09_岗位定制简历 三处的一致性。
+
+    为什么需要：AGENT.md 规定了产物命名，但命名相近（`公司_岗位.md` 与
+    `公司_岗位_匹配分析.md`）容易被误认为重复生成，也确实存在「只留了一份」
+    的历史遗留。本命令把不一致显式列出，避免靠人肉比对。
+    """
+    try:
+        lib = resolve_lib(args.lib)
+    except ResumeLibNotFound as exc:
+        bad("未找到简历库")
+        print(str(exc))
+        return 1
+
+    jd_dir = lib / "11_岗位JD"
+    ana_dir = lib / "13_JD分析"
+    resume_dir = lib / "09_岗位定制简历"
+
+    head("简历库一致性校验")
+    print(f"  简历库：{lib}")
+
+    # ---- 1. 收集岗位（以 13_JD分析 与 11_岗位JD 的并集为准）----
+    def stems(folder: Path) -> dict[str, Path]:
+        out: dict[str, Path] = {}
+        if not folder.is_dir():
+            return out
+        for f in folder.glob("*.md"):
+            out[f.stem] = f
+        return out
+
+    jd_files = stems(jd_dir)
+    ana_files = stems(ana_dir)
+
+    # 归一：把 _匹配分析 后缀去掉，得到「岗位键」
+    def base_of(stem: str) -> str:
+        return re.sub(r"_匹配分析$", "", stem)
+
+    positions: dict[str, dict[str, Path]] = {}
+    for stem, path in {**jd_files, **ana_files}.items():
+        positions.setdefault(base_of(stem), {})[stem] = path
+
+    print(f"\n  发现 {len(positions)} 个岗位记录\n")
+
+    problems: list[str] = []
+    print(f"  {'岗位':<44} {'JD原文':<7} {'JD分析':<7} {'匹配分析':<8} {'成品':<5}")
+    print("  " + "-" * 76)
+
+    for key in sorted(positions):
+        has_jd = key in jd_files
+        has_ana = key in ana_files
+        has_match = f"{key}_匹配分析" in ana_files
+
+        # 成品：在 09_岗位定制简历 下找。
+        # 放宽匹配：JD 文件名里的「岗位」可能与实际投递岗位不同
+        # （如 JD 叫「招聘简章」，实际投的是「库管员」），因此按公司目录
+        # 找任意产物，而不是要求岗位名精确相等。        has_docx = False
+        parts = key.split("_")
+        if len(parts) >= 3:
+            company = parts[1]
+            company_dir = resume_dir / company
+            if company_dir.is_dir():
+                has_docx = any(company_dir.rglob("*.docx"))
+            else:
+                # 公司名也可能带后缀（如 JD 写「某公司华北某市分公司」，而目录名是「某公司」）
+                for cand in resume_dir.iterdir() if resume_dir.is_dir() else []:
+                    if cand.is_dir() and (cand.name in company or company in cand.name):
+                        if any(cand.rglob("*.docx")):
+                            has_docx = True
+                            break
+
+        mark = lambda b: "✓" if b else "✗"      # noqa: E731
+        print(f"  {key:<44} {mark(has_jd):<7} {mark(has_ana):<7} "
+              f"{mark(has_match):<8} {mark(has_docx):<5}")
+
+        if not has_jd:
+            problems.append(f"{key}：缺 JD 原文（11_岗位JD）")
+        if not has_ana:
+            problems.append(f"{key}：缺 JD 结构化分析（13_JD分析/{key}.md）"
+                            " —— 匹配分析里含分析内容时可忽略")
+        if not has_match:
+            problems.append(f"{key}：缺匹配分析（13_JD分析/{key}_匹配分析.md）")
+        if has_ana and not has_match:
+            problems.append(f"{key}：只有 JD 分析、没有匹配分析（还没做匹配）")
+
+    head("结论")
+    if problems:
+        warn(f"发现 {len(problems)} 处不完整：")
+        for p in problems:
+            print(f"      · {p}")
+        print()
+        print("  说明：这两个文件是**不同阶段**的产物，不是重复：")
+        print(f"      {ana_dir.name}/YYYY-MM-DD_公司_岗位.md"
+              "            → ① JD 要什么（与候选人无关）")
+        print(f"      {ana_dir.name}/YYYY-MM-DD_公司_岗位_匹配分析.md"
+              "      → ② 这个人与它的关系")
+        print("  若某岗位只保留了匹配分析（内容已含 JD 分析要点），可接受，"
+              "但不利于同岗位复用。")
+        return 0
+
+    ok("三处产物齐全且命名规范")
+    return 0
 
 
 # ============================================================================
@@ -651,6 +759,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_ls = sub.add_parser("list-templates", help="列出可用模板与字段")
     p_ls.set_defaults(func=cmd_list_templates)
+
+    p_ck = sub.add_parser("check-library",
+                          help="校验简历库一致性（JD原文/JD分析/匹配分析/成品）")
+    p_ck.set_defaults(func=cmd_check_library)
 
     p_std = sub.add_parser("standardize", help="把上传的 docx 标准化为可用模板")
     p_std.add_argument("docx", help="待标准化的 .docx 文件")
