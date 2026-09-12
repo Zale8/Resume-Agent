@@ -168,7 +168,8 @@ python tests/check_privacy.py --install-hook  # 安装 pre-commit 守卫
 ### 提交入口
 
 Git 的 `pre-commit` 钩子在 Windows 上要通过 `sh` 执行，受限环境里会因
-`couldn't create signal pipe` 失败。因此提供**零依赖的 Python 提交入口**：
+`couldn't create signal pipe, Win32 error 5` 直接失败，导致**连正常提交都做不了**。
+因此推荐使用**零依赖的 Python 提交入口**：
 
 ```bash
 python commit.py -m "feat: 新增 xxx"           # 只提交已暂存内容
@@ -177,6 +178,9 @@ python commit.py -m "docs: 更新说明" --all     # 先 add -A 再提交
 
 它会先跑审计，通过才提交；失败则拒绝并打印处理方式。
 `--force` 可跳过（仅在人工确认无个人数据时使用）。
+
+> `--install-hook` 仍可用（适合正常桌面环境），但若遇到上述 `sh` 报错，
+> 请把 `.git/hooks/pre-commit` 改名停用，改用 `commit.py`。
 
 ### 历史教训（务必阅读）
 

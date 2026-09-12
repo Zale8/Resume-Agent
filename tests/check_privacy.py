@@ -249,6 +249,8 @@ def install_hook(repo: Path) -> int:
         "#!/bin/sh\n"
         "# Resume-Agent 提交守卫：阻止把个人数据提交进产品仓库\n"
         "# 由 tests/check_privacy.py --install-hook 安装\n"
+        "# 注意：本钩子需要 sh。受限环境（无法创建命名管道）会失败，\n"
+        "#       此时请改用 `python commit.py -m \"...\"` 提交。\n"
         'python "$(git rev-parse --show-toplevel)/tests/check_privacy.py" || {\n'
         '  echo ""\n'
         '  echo "❌ 提交被阻止：发现个人数据。请先处理，或用 --no-verify 强制跳过。"\n'
@@ -262,6 +264,14 @@ def install_hook(repo: Path) -> int:
         pass
     print(f"✅ 已安装 pre-commit 守卫：{hook}")
     print("   若确需跳过单次检查：git commit --no-verify")
+    print()
+    print("⚠️  重要：Git 钩子在 Windows 上要通过 sh 执行。若你的环境无法创建")
+    print("    命名管道（表现为 `sh: couldn't create signal pipe, Win32 error 5`），")
+    print("    钩子会直接失败导致无法提交。此时请改用：")
+    print()
+    print("        python commit.py -m \"feat: xxx\" --all")
+    print()
+    print("    它内置同样的审计，且不依赖 shell。")
     return 0
 
 
