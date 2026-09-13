@@ -29,15 +29,12 @@ Desktop.ini
 *.gif
 *.bmp
 *.webp
-# 例外：模板/文档所需设计资源若未来需要入库，用 ! 取反
-!templates/**/*.png
+# 例外：文档所需示意图若未来需要入库，用 ! 取反
 !docs/**/*.png
 
-# 个人简历导出物
+# 个人简历导出物（产品不内置任何 docx 模板，全部 docx 均视为个人产物）
 *.pdf
 *.docx
-# 例外：templates/ 下的空白模板 docx（含 {{FIELD}} 标记，无个人数据）
-!templates/**/*.docx
 
 # ===== 依赖与构建 =====
 node_modules/

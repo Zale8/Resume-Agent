@@ -133,7 +133,7 @@ def _not_found_message(starts: Iterable[Path]) -> str:
 def find_product_root(start: Optional[Path] = None) -> Path:
     """定位 Resume-Agent 产品仓库根目录。
 
-    判定依据：目录内同时存在 ROOT_MARKERS 中的文件，或存在 src/ 与 templates/。
+    判定依据：目录内存在 ROOT_MARKERS 中的文件（AGENT.md / agent_entry.md / PRD.md）。
     """
     starts = []
     if start is not None:
@@ -143,8 +143,6 @@ def find_product_root(start: Optional[Path] = None) -> Path:
     for s in starts:
         for base in _ancestors(s):
             if any((base / m).exists() for m in ROOT_MARKERS):
-                return base
-            if (base / "src").is_dir() and (base / "templates").is_dir():
                 return base
 
     # 兜底：src/resume_generator/paths.py -> 上溯三级 = 仓库根

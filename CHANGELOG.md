@@ -2,6 +2,33 @@
 
 本项目的所有重要变更将记录在此文件中。
 
+## v0.3 (2026-09-13) — 删除模板库，简历由 Agent 动态生成
+
+> 起因（用户明确决策）：「把 templates 删掉，以后不要从里面挑选模板生成了，自行生成。」
+> 体检产品时发现：5 份成品简历只有 1 份走 `gen.py render`，最满意的单栏极简 /
+> 横幅工牌卡版式均为 Agent 临时脚本动态排版产出；固定模板真实渲染还会丢弃技能字段、
+> 留空字段、估算超页。模板路线与实际生产脱节且无法复现满意版式。
+
+### Removed（破坏性变更）
+
+- **删除整个 `templates/` 模板库**（5 套模板；Git 历史可恢复）
+- 删除模板渲染流水线：`src/resume_generator/docx_engine.py`、`resume_map.py`、`template_kit.py`
+- 删除 3 个配套测试：`smoke_docx_engine.py`、`smoke_resume_map.py`、`smoke_other_user.py`
+- `gen.py` 移除 `render` / `standardize` / `list-templates` 三个子命令
+- `.gitignore` 移除 templates 下 docx/png 的入库例外（产品内不再有任何 docx）
+
+### Changed
+
+- **生成方式改为动态排版**：每份简历由 Agent 编写一次性 python-docx 脚本直接构建
+  （布局/配色/字体/照片全部代码生成），数据运行时从简历库读取、不硬编码，
+  Word COM 实测 1 页，确认后删除临时脚本（AGENT.md §十三/§十四 重写）
+- `gen.py doctor` 新增 python-docx / pywin32 可用性检测；CLI 本身仍零依赖
+- `paths.py` 产品根判定不再依赖 templates/ 目录
+- 自检清单从 11 项扩为 **12 项**（新增「单页与照片」，临时脚本条目更新）
+- 全面重写文档：AGENT.md / agent_entry.md / README.md / PRD.md /
+  architecture.md / resume_writer.md / src/README.md / scripts/README.md
+- resume.md 内容层不再使用模板字段代码（NAME/W1C 等），改为通用章节结构
+
 ## v0.2.7 (2026-09-13) — JD 产物分目录
 
 > 起因：用户发现 `13_JD分析/` 下同时出现两个名字只差后缀的文件，

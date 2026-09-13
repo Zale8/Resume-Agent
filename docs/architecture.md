@@ -1,7 +1,7 @@
 # 架构说明：代码目录与简历数据目录分离
 
 > v0.1 起生效。核心原则：**Git 仓库只存产品，个人数据只存本地。**
-> v0.2 追加：**渲染层零依赖、零绝对路径、跨平台**（见第五节）。
+> v0.2 曾追加固定模板渲染层；**v0.3 已移除模板库，改为 Agent 动态生成 DOCX**（见第五节）。
 
 ## 一、目录拓扑
 
@@ -14,15 +14,16 @@
 │   ├── AGENT.md               ← Agent 核心行为规范（治理规则）
 │   ├── agent_entry.md         ← 通用主提示词（任意 AI 加载即用的入口）
 │   ├── CHANGELOG.md
-│   ├── gen.py                 ← 统一 CLI 入口
+│   ├── gen.py                 ← 运维 CLI（doctor / check-library，零依赖）
 │   ├── .gitignore
-│   ├── src/                   ← 产品代码（零第三方依赖）
+│   ├── src/                   ← 产品代码：paths 路径发现 + data_loader 只读解析
 │   ├── prompts/               ← Agent 提示词（方法论，不含个人数据）
+│   ├── scripts/               ← 通用工具（check_pages.py 页数估算）
 │   ├── skills/                ← 技能模块（产品能力封装）
 │   ├── workflows/             ← 工作流规范
-│   ├── templates/             ← 简历模板系统（版式/字体/配色规则）
-│   ├── tests/                 ← 回归测试
+│   ├── tests/                 ← 隐私审计
 │   └── docs/                  ← 产品文档
+│   （v0.3 起无 templates/ 目录：不保存任何固定简历模板）
 │
 └── 简历库/                    ← 个人简历数据库（本地，禁止进入 Git）
     ├── 00_个人信息/            ← 联系方式 + photos/ 证件照
@@ -54,8 +55,9 @@
 | 产品代码 | `Resume-Agent/src/` | ✅ |
 | Agent / Prompt | `Resume-Agent/prompts/`、`AGENT.md` | ✅ |
 | Skills | `Resume-Agent/skills/` | ✅ |
-| 模板系统 | `Resume-Agent/templates/` | ✅ |
+| 通用工具 | `Resume-Agent/scripts/` | ✅ |
 | 工作流规范 | `Resume-Agent/workflows/` | ✅ |
+| 固定简历模板 | —— | ❌ v0.3 起不保存模板；版式每次动态生成 |
 | 配置（产品侧） | `.gitignore` 等 | ✅ |
 | 文档 | `Resume-Agent/docs/`、`README/PRD/CHANGELOG` | ✅ |
 | 个人信息/教育/实习/项目/技能 | `简历库/` | ❌ |
@@ -75,61 +77,70 @@
 1. **物理隔离**：简历库在 Git 仓库目录之外，`git add` 永远扫不到
 2. **.gitignore 规则**：仓库内仍保留 `data/ jd/ analysis/ generated/ config/` 等路径的忽略规则，防止误建目录后误提交
 
-## 五、渲染层架构（v0.2 新增）
+## 五、DOCX 生成层架构（v0.3 重写）
 
-### 数据流
+### v0.2 固定模板路线为什么被废弃
+
+v0.2 的链路是 `templates/*/template.docx（{{FIELD}} 占位符）+ resume.md → gen.py render`。
+真实使用暴露三个结构性问题：
+
+1. **槽位丢内容**：模板字段固定，真实简历出现「技能 3 项全被丢弃、字段留空、
+   证书只进 3/4 项」等警告，岗位最关键的匹配内容反而进不了简历；
+2. **版式不可演进**：用户最满意的成品（单栏极简、横幅工牌卡）都是 Agent 临时脚本
+   动态排版做的，模板库复刻不出来；「换色式假模板」也被用户明确否决；
+3. **产品链路与实际生产脱节**：5 份成品里只有 1 份走 render，其余全靠临时脚本。
+
+2026-09-13 用户决策：删除模板库与渲染流水线（docx_engine / resume_map /
+template_kit 及 3 个相关 smoke 测试一并移除，Git 历史可查），**每份简历由 Agent
+自行生成**。
+
+### v0.3 数据流
 
 ```
 简历库/00~08（INPUT，只读）
         +
-模板 templates/*/template.docx（产品资产）
+resume.md（AI 产出并经用户确认的内容层）
         +
-resume.md / resume.fields.json（AI 产出的内容层）
+99_配置/style_preferences.md（设计偏好）
         │
         ▼
-   gen.py render
-        │
-        ├── paths.py        定位简历库（无绝对路径）
-        ├── resume_map.py   内容 → 模板字段（三级降级）
-        ├── docx_engine.py  字段 → DOCX（只改 <w:t> 文本）
-        └── data_loader.py  仅 --supplement 时读取客观字段
+Agent 编写「一次性 python-docx 脚本」（系统临时目录，不入库）
+   ├── data_loader / paths   运行时读取事实与定位简历库
+   ├── 版式代码               页面/字体/配色/分栏/表格/照片/色块，按本次设计构建
+   └── argv 参数              公司/岗位/日期，不硬编码
         │
         ▼
-简历库/09_岗位定制简历/{公司}/{岗位}/{日期}/*.docx（OUTPUT）
+简历库/09_岗位定制简历/{公司}/{岗位}/{日期}/姓名_公司_岗位.docx（OUTPUT）
+        │
+        ▼
+Word COM ComputeStatistics(2) 实测页数 = 1 → 用户目视确认 → 删除临时脚本
 ```
 
 **OUTPUT 永不回流为 INPUT**（见 [AGENT.md §十二](../AGENT.md)）。
 
-### 为什么自己实现 DOCX 填充而不用 python-docx
+### 依赖策略（分层）
 
-| 原因 | 说明 |
-|---|---|
-| 零依赖 | `python-docx` 需要 `pip install`；离线/内网/新电脑上会卡住 |
-| 保真 | `python-docx` 会丢弃非标准命名空间（`v:` / `o:` / `w10:` / `mc:`），破坏模板版式 |
-| 问题本质 | 模板里的 `{{FIELD}}` 全部位于单个 `<w:t>` run 内，是纯文本替换问题 |
-| 确定性 | 只改文本、其余 zip 条目字节复制，结果可复现、可审计 |
+| 层 | 依赖 | 说明 |
+|---|---|---|
+| 运维 CLI（gen.py / check_privacy） | 仅 Python 3.8+ 标准库 | 零依赖，任意机器可体检 |
+| DOCX 构建（一次性脚本） | `python-docx` | 生成必需；doctor 检测并提示安装 |
+| 页数实测（一次性脚本） | Word/WPS + `pywin32` | 可选，Windows 本机最可靠 |
+| 无 Word 时估算 | `scripts/check_pages.py` | 通用近似估算 |
 
-### 三个必须处理的版式陷阱
+### 为什么动态生成不违背「可复现 / 可换人」
 
-1. **空格对齐槽位**：模板用字面空格而非制表位对齐，例如
-   `<w:t>{{W1C}}　　　　          {{W1P}}</w:t>`。
-   替换值短于槽位必须补空格，否则「职位」左移、整行错位。
-   → 实现为 `docx_engine.Slot`（容量 = 标记宽度 + 其后空格宽度）。
-2. **`mc:Choice` / `mc:Fallback` 双写**：文本框在 OOXML 中写入两份内容，
-   只替换一份会导致 Word 与其他阅读器显示不一致。
-   → 填充时两个分支都会被替换；统计文字量时剔除 `mc:Fallback` 以免虚高。
-3. **t01 品红补高 run**：`<w:rPr>` 颜色为 `FF00FF`、只含 `<w:br/>` 的 run 用于撑起左栏高度，
-   使右栏浮动文本框不错位。必须在填充前删除，否则会多出空白行。
-   → `docx_engine.strip_marker_runs`。
+- **可换人**：脚本不含任何个人事实，数据全部运行时从简历库读取；换简历库即换人，不改产品。
+- **可追溯**：每次生成的 resume.md + generation_notes.md（含版式设计、取舍、实测页数）
+  存在岗位目录；产品侧规范（AGENT §十四 / agent_entry §5）保证每次生成行为一致。
+- **不污染仓库**：一次性脚本放临时目录、用后即删，公司/岗位特定信息永远不进 Git。
+- 版式是**个人产物**（随岗位变化），产品沉淀的是设计范式（双栏/横幅卡/单栏极简）
+  与通用规范，而不是 docx 文件。
 
-### 单页校验的诚实边界
+### 单页校验
 
-`docx_engine.estimate_overflow` 统计文字量估算行数，**不启动 Word、不做真实排版**，
-因此只能给出 `ok` / `likely_overflow` 两档提示，不是精确页数。
-
-- 零依赖、跨平台、随时可用 → 采用它作为默认提示；
-- 需要更精确时，装 `python-docx` 后用 `scripts/check_pages.py` 做二次确认；
-- 最终仍须打开文档**目视确认**。
+- 以 Word COM `ComputeStatistics(2)` **实测 = 1 页**为交付门槛；
+- 无 Word 时用 `scripts/check_pages.py` 估算 + 必须用户目视确认；
+- 超页动作是删减内容（先砍 Weakly Relevant）与收紧间距，正文不低于 9pt。
 
 ## 六、数据隔离的可执行验证（v0.2.2 新增）
 
@@ -201,19 +212,15 @@ python commit.py -m "docs: 更新说明" --all     # 先 add -A 再提交
 **结论：删除文件不等于删除历史。** 任何涉及个人数据的提交都必须假设
 「它会永久留在历史里」，因此必须在提交前阻断，而不是事后清理。
 
-## 七、跨用户通用性验证
+## 七、跨用户通用性（v0.3 口径）
 
-`tests/smoke_other_user.py` 在系统临时目录下另建一套**完全虚构**的简历库
-（目录名故意不叫「简历库」，路径层级与产品仓库无关），然后验证：
+v0.2 曾用 `tests/smoke_other_user.py` 端到端验证「换人 / 换位置 / 不改代码」；
+v0.3 渲染流水线移除后该测试同步删除。通用性改由以下机制保证（可随时人工复核）：
 
-1. 从该目录运行 `gen.py doctor` 能自动定位到这个陌生位置的简历库
-2. 不传 `--lib` / `--out` 也能渲染成功（靠自动发现 + 自动归档）
-3. 产物落在该简历库的岗位定制简历目录下
-4. 产物内容是正确的虚构用户数据
-5. 产物**完全不含**真实用户信息（按仓库外词表逐项比对）
-6. 产品仓库内没有被写入任何用户数据
-
-这直接验证了「换人 / 换位置 / 不改代码」这一核心要求。
+1. `paths.py` 自动发现简历库（支持 `--lib` / `RESUME_LIB`、任意目录名）——`gen.py doctor` 验证；
+2. `data_loader.py` 只读解析简历库，产品代码内零个人数据——`tests/check_privacy.py` 审计；
+3. **一次性生成脚本禁止硬编码任何个人事实**，数据运行时读取、公司/岗位走参数
+   （AGENT.md §十三/§十四）；换人 = 换简历库，产品代码与规范零改动。
 
 ## 八、历史教训（依赖与可移植性）
 
@@ -223,16 +230,19 @@ python commit.py -m "docs: 更新说明" --all     # 先 add -A 再提交
 后果：换电脑/换用户名即失效；macOS/Linux 完全无法运行；Word 无响应时脚本挂起（实测）。
 
 v0.2 处理：删除 `render_templates.py` / `gen_template_configs.py` / `reprocess_templates.py`，
-重写为零依赖、零绝对路径的 `gen.py` + `src/resume_generator/`，
-并在 [AGENT.md §十四](../AGENT.md) 将其固化为不可违反的规范。
+重写为零依赖、零绝对路径的 `gen.py` + `src/resume_generator/`。
+
+v0.3 再处理：实践证明固定模板槽位会丢内容、满意版式均来自动态生成，
+故删除 `templates/` 与 `docx_engine.py` / `resume_map.py` / `template_kit.py`，
+改为 Agent 一次性 python-docx 脚本动态生成（用后即删），规范固化于
+[AGENT.md §十四](../AGENT.md)。`gen.py` 本身仍保持零依赖。
 
 ### 当前可移植性保证
 
 | 保证 | 验证方式 |
 |---|---|
-| 零第三方依赖（仅 Python 3.8+ 标准库） | `python gen.py doctor` |
+| 运维 CLI 零第三方依赖（仅标准库） | `python gen.py doctor` |
 | 零绝对路径 | 核心代码扫描 `C:\Users` 无命中 |
-| 跨用户 / 跨位置 | `python tests/smoke_other_user.py` |
+| 跨用户 / 跨位置 | 路径自动发现 + 生成脚本不硬编码个人数据（§七） |
 | 数据隔离 | `python tests/check_privacy.py` |
-| 模板填充正确性 | `python tests/smoke_docx_engine.py` |
-| 解析与映射正确性 | `python tests/smoke_resume_map.py` |
+| 生成依赖可见性 | `gen.py doctor` 检测 python-docx / pywin32 是否可用 |
