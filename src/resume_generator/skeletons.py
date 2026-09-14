@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Optional
 
 from resume_generator.layout_kit import (
+    A4_WIDTH_CM,
     FONT_CN,
     MIN_BODY_PT,
     PALETTES,
@@ -25,8 +26,10 @@ from resume_generator.layout_kit import (
     hex_rgb,
     insert_photo,
     set_cell_margins,
+    set_cell_width,
     set_paragraph_spacing,
     set_run_font,
+    set_table_fixed_layout,
     setup_a4,
     shade_cell,
 )
@@ -60,15 +63,17 @@ def build_banner_card(blocks: ResumeBlocks, palette: Palette):
     from docx.shared import Cm, Pt
 
     doc = Document()
-    setup_a4(doc, margins_cm=(0.7, 0.7, 1.1, 1.1))
+    setup_a4(doc, margins_cm=(0.55, 0.55, 1.0, 1.0))
     _set_doc_default_font(doc)
 
     table = doc.add_table(rows=1, cols=2)
     clear_table_borders(table)
-    table.autofit = True
+    set_table_fixed_layout(table, A4_WIDTH_CM - 1.1 - 1.1, [8.4, 10.4])
     left, right = table.rows[0].cells
     shade_cell(left, palette.header)
     shade_cell(right, palette.header)
+    set_cell_width(left, 8.4)
+    set_cell_width(right, 10.4)
     set_cell_margins(left, top=0.25, bottom=0.25, left=0.35, right=0.2)
     set_cell_margins(right, top=0.2, bottom=0.2, left=0.1, right=0.25)
 
@@ -115,12 +120,16 @@ def build_minimal(blocks: ResumeBlocks, palette: Palette):
     from docx.shared import Cm, Pt, Twips
 
     doc = Document()
-    setup_a4(doc, margins_cm=(1.1, 1.0, 1.5, 1.5))
+    setup_a4(doc, margins_cm=(0.7, 0.7, 1.25, 1.25))
     _set_doc_default_font(doc)
 
     head = doc.add_table(rows=1, cols=2)
     clear_table_borders(head)
+    # 页边距左右各 1.5cm
+    set_table_fixed_layout(head, A4_WIDTH_CM - 1.5 - 1.5, [13.0, 5.0])
     c0, c1 = head.rows[0].cells
+    set_cell_width(c0, 13.0)
+    set_cell_width(c1, 5.0)
     p = c0.paragraphs[0]
     set_paragraph_spacing(p, before=0, after=0, line=1.05)
     add_text(p, blocks.name, 20, bold=True, color=palette.ink)
@@ -137,7 +146,7 @@ def build_minimal(blocks: ResumeBlocks, palette: Palette):
     insert_photo(rp, blocks.photo_path, 1.85, 2.4)
 
     rule = doc.add_paragraph()
-    set_paragraph_spacing(rule, before=4, after=10, line=0.5)
+    set_paragraph_spacing(rule, before=4, after=7, line=0.5)
     _bottom_border(rule, palette.accent, sz="12")
 
     idx = 1
@@ -145,15 +154,15 @@ def build_minimal(blocks: ResumeBlocks, palette: Palette):
         _numbered_title(doc, idx, "个人优势", palette)
         idx += 1
         sp = doc.add_paragraph()
-        set_paragraph_spacing(sp, before=0, after=8, line=1.08)
-        add_text(sp, blocks.summary, 10, color=palette.ink)
+        set_paragraph_spacing(sp, before=0, after=6, line=1.06)
+        add_text(sp, blocks.summary, 9.5, color=palette.ink)
 
     _numbered_title(doc, idx, "教育经历", palette)
     idx += 1
     for line in blocks.education_lines:
         ep = doc.add_paragraph()
-        set_paragraph_spacing(ep, before=0, after=6, line=1.08)
-        add_text(ep, line, 10, color=palette.ink)
+        set_paragraph_spacing(ep, before=0, after=4, line=1.06)
+        add_text(ep, line, 9.5, color=palette.ink)
 
     if blocks.internships:
         _numbered_title(doc, idx, "实习经历", palette)
@@ -169,16 +178,16 @@ def build_minimal(blocks: ResumeBlocks, palette: Palette):
         _numbered_title(doc, idx, "校园经历", palette)
         idx += 1
         for item in blocks.campus:
-            _body_bullet(doc, item, palette, size=10)
+            _body_bullet(doc, item, palette, size=9.5)
 
     _numbered_title(doc, idx, "专业技能与证书", palette)
     for s in blocks.skills:
-        _body_bullet(doc, s, palette, size=10)
+        _body_bullet(doc, s, palette, size=9.5)
     if blocks.certs:
         cp = doc.add_paragraph()
-        set_paragraph_spacing(cp, before=2, after=0, line=1.08)
-        add_text(cp, "证书资质  ", 10, bold=True, color=palette.ink)
-        add_text(cp, "  ·  ".join(blocks.certs), 10, color=palette.ink)
+        set_paragraph_spacing(cp, before=2, after=0, line=1.06)
+        add_text(cp, "证书资质  ", 9.5, bold=True, color=palette.ink)
+        add_text(cp, "  ·  ".join(blocks.certs), 9.5, color=palette.ink)
     _ = (Cm, Pt, Twips)
     return doc
 
@@ -195,11 +204,12 @@ def build_sidebar(blocks: ResumeBlocks, palette: Palette):
 
     table = doc.add_table(rows=1, cols=2)
     clear_table_borders(table)
-    table.autofit = False
+    # 页边距左右各 0.8cm，可用宽 = A4宽 - 1.6
+    set_table_fixed_layout(table, A4_WIDTH_CM - 0.8 - 0.8, [5.9, 13.5])
     left, right = table.rows[0].cells
-    # 约 32% / 68%
-    left.width = Cm(5.8)
-    right.width = Cm(12.8)
+    # 约 32% / 68%，显式写 tcW 才会生效
+    set_cell_width(left, 5.9)
+    set_cell_width(right, 13.5)
     shade_cell(left, palette.rule)
     set_cell_margins(left, top=0.3, bottom=0.3, left=0.28, right=0.28)
     set_cell_margins(right, top=0.2, bottom=0.2, left=0.4, right=0.2)
@@ -303,14 +313,14 @@ def _bottom_border(paragraph, color: str, sz="8"):
 
 def _section_title(doc, text, palette: Palette, numbered=False):
     p = doc.add_paragraph()
-    set_paragraph_spacing(p, before=8, after=2, line=1.0)
+    set_paragraph_spacing(p, before=5, after=1, line=1.0)
     add_text(p, ("▍ " if not numbered else "") + text, 12, bold=True, color=palette.ink)
     add_hairline(doc, palette.rule)
 
 
 def _numbered_title(doc, n: int, text: str, palette: Palette):
     p = doc.add_paragraph()
-    set_paragraph_spacing(p, before=8, after=2, line=1.0)
+    set_paragraph_spacing(p, before=5, after=1, line=1.0)
     add_text(p, f"{n:02d}  ", 12, bold=True, color=palette.accent)
     add_text(p, text, 12, bold=True, color=palette.ink)
     add_hairline(doc, palette.rule)
@@ -348,13 +358,13 @@ def _experience_blocks_minimal(doc, items, palette: Palette):
     for item in items:
         hp = doc.add_paragraph()
         set_paragraph_spacing(hp, before=3, after=1, line=1.05)
-        add_text(hp, item.title, 11, bold=True, color=palette.ink)
+        add_text(hp, item.title, 10.5, bold=True, color=palette.ink)
         if item.role:
             add_text(hp, "  " + item.role, 10, bold=True, color=palette.accent)
         if item.meta:
             add_text(hp, "    " + item.meta, 9, color=palette.muted)
         for b in item.bullets:
-            _body_bullet(doc, b, palette, size=10)
+            _body_bullet(doc, b, palette, size=9.5)
 
 
 def _experience_in_cell(cell, items, palette: Palette):

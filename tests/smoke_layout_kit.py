@@ -57,6 +57,31 @@ def fictional_blocks():
     )
 
 
+def _assert_cell_margins_sane(doc, sid: str) -> None:
+    """校验所有表格单元格内边距的 twips 值在合理范围内。
+
+    回归点：w:tcMar 的单位是 twips（dxa），最大合理值约几厘米（1cm=567twips）。
+    若出现 > 50000（~88cm）说明又把 EMU 当 twips 写了。
+    """
+    from docx.oxml.ns import qn
+
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                tcPr = cell._tc.find(qn("w:tcPr"))
+                if tcPr is None:
+                    continue
+                tcMar = tcPr.find(qn("w:tcMar"))
+                if tcMar is None:
+                    continue
+                for node in tcMar:
+                    val = node.get(qn("w:w"))
+                    if val and int(val) > 50000:
+                        raise AssertionError(
+                            f"{sid}: 单元格内边距异常（w={val} twips，疑似 EMU 误作 twips）"
+                        )
+
+
 def main() -> int:
     try:
         from resume_generator.layout_kit import (
@@ -83,6 +108,10 @@ def main() -> int:
     palettes = ["tech_navy", "minimal_ink", "manufacturing_steel"]
     for sid, pal in zip(ids, palettes):
         doc = build_document(blocks, sid, pal)
+        # 回归守卫：单元格内边距的 twips 值必须在合理范围内。
+        # 历史 bug：Cm() 返回 EMU，却当作 dxa 写进 w:tcMar，
+        # 0.25cm 变成 ~142cm，导致分页探成几十页。
+        _assert_cell_margins_sane(doc, sid)
         path = out_dir / f"zhangsan_{sid}.docx"
         doc.save(path)
         if path.stat().st_size < 2000:

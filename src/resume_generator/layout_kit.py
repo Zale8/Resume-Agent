@@ -179,7 +179,7 @@ def add_text(paragraph, text, size_pt, **kwargs):
 def add_hairline(doc, color="#E0E0E0"):
     """段落下发丝线（底边框）。"""
     p = doc.add_paragraph()
-    set_paragraph_spacing(p, before=0, after=4, line=1.0)
+    set_paragraph_spacing(p, before=0, after=3, line=1.0)
     pPr = p._p.get_or_add_pPr()
     from docx.oxml import OxmlElement
     from docx.oxml.ns import qn
@@ -208,7 +208,13 @@ def shade_cell(cell, hex_color: str):
 
 
 def set_cell_margins(cell, **cm_kwargs):
-    """cell 内边距，单位厘米。keys: top/bottom/left/right。"""
+    """cell 内边距，单位厘米。keys: top/bottom/left/right。
+
+    注意：w:tcMar 的 w 值单位是 **twips（dxa）**，不是 EMU。
+    python-docx 的 Cm() 返回 EMU，直接当 dxa 写会放大 567 倍
+    （0.25cm 会变成 ~142cm 的内边距，把分页探成几十页）。
+    因此统一用 Cm(cm).twips 换算。
+    """
     from docx.oxml import OxmlElement
     from docx.oxml.ns import qn
     from docx.shared import Cm
@@ -218,10 +224,74 @@ def set_cell_margins(cell, **cm_kwargs):
     tcMar = OxmlElement("w:tcMar")
     for key, val in cm_kwargs.items():
         node = OxmlElement(f"w:{key}")
-        node.set(qn("w:w"), str(int(Cm(val))))
+        node.set(qn("w:w"), str(int(Cm(val).twips)))
         node.set(qn("w:type"), "dxa")
         tcMar.append(node)
     tcPr.append(tcMar)
+
+
+def set_table_fixed_layout(table, total_width_cm: float, column_widths_cm=None):
+    """把表格设为固定布局，并显式设置总宽 + 列宽（tblGrid）。
+
+    为什么必需：python-docx 只给 `cell.width` 赋值时，Word 仍会按内容
+    自动重新分配列宽，导致窄栏（如侧边栏）塔陷成一个字一行、总分页几十页。
+    真正的列宽由 `<w:tblGrid><w:gridCol w:w=.../>` 决定；必须重写它，
+    再配合 tblLayout=fixed 与 tcW 才能彻底生效。
+
+    column_widths_cm 传入每列宽度（厘米）；不传则均分总宽。
+    """
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+    from docx.shared import Cm
+
+    tbl = table._tbl
+    tblPr = tbl.tblPr if tbl.tblPr is not None else OxmlElement("w:tblPr")
+
+    # ① 固定布局
+    for old in tblPr.findall(qn("w:tblLayout")):
+        tblPr.remove(old)
+    layout = OxmlElement("w:tblLayout")
+    layout.set(qn("w:type"), "fixed")
+    tblPr.append(layout)
+
+    # ② 总宽
+    for old in tblPr.findall(qn("w:tblW")):
+        tblPr.remove(old)
+    tblW = OxmlElement("w:tblW")
+    tblW.set(qn("w:w"), str(int(Cm(total_width_cm).twips)))
+    tblW.set(qn("w:type"), "dxa")
+    tblPr.append(tblW)
+
+    # ③ 重写 tblGrid（真正的列宽来源）
+    # ncols 从行单元格数取，不能依赖 table.columns（它本身就依赖 tblGrid）
+    ncols = len(table.rows[0].cells)
+    grid = tbl.find(qn("w:tblGrid"))
+    if grid is not None:
+        tbl.remove(grid)
+    grid = OxmlElement("w:tblGrid")
+    if column_widths_cm is None:
+        column_widths_cm = [total_width_cm / ncols] * ncols
+    for w_cm in column_widths_cm:
+        gc = OxmlElement("w:gridCol")
+        gc.set(qn("w:w"), str(int(Cm(w_cm).twips)))
+        grid.append(gc)
+    # tblGrid 必须紧跟 tblPr
+    tblPr.addnext(grid)
+
+
+def set_cell_width(cell, width_cm: float):
+    """显式设置单元格宽度（tcW），配合 set_table_fixed_layout 使用才可靠。"""
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+    from docx.shared import Cm
+
+    tcPr = cell._tc.get_or_add_tcPr()
+    for old in tcPr.findall(qn("w:tcW")):
+        tcPr.remove(old)
+    tcW = OxmlElement("w:tcW")
+    tcW.set(qn("w:w"), str(int(Cm(width_cm).twips)))
+    tcW.set(qn("w:type"), "dxa")
+    tcPr.append(tcW)
 
 
 def clear_table_borders(table):
