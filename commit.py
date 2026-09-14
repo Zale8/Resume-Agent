@@ -28,6 +28,13 @@ import subprocess
 import sys
 from pathlib import Path
 
+# Windows 控制台默认 GBK，输出 ✅/❌ 会抛 UnicodeEncodeError 而中断提交。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+    except (AttributeError, ValueError, OSError):
+        pass
+
 HERE = Path(__file__).resolve().parent
 AUDIT = HERE / "tests" / "check_privacy.py"
 

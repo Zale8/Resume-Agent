@@ -211,11 +211,17 @@
 
 ## 与 DOCX 动态生成的衔接
 
-resume.md 是**内容层**产物；v0.3 起没有模板渲染器，DOCX 由 Agent 编写一次性
-python-docx 脚本**动态构建**（AGENT.md §十四 / agent_entry.md 第 5 节）：
+resume.md 是**内容层**产物；v0.4 起没有模板渲染器，也没有需要每次重写的版式脚本。
+DOCX 由 Agent 复用产品仓库的通用排版积木**动态构建**
+（AGENT.md §十四 / agent_entry.md 第 5 节）：
 
-- 脚本运行时从简历库 / resume.md 读取全部事实，不硬编码个人数据；
-- 页面、字体、配色、分栏、照片、板块全部代码生成；
-- 照片取自 `00_个人信息/photos/`；
-- 生成后用 Word COM 实测页数 = 1，再请用户目视确认；
-- 简历确认后立即删除临时脚本，不入 Git。
+1. 把 resume.md 内容填入 `resume_generator.layout_kit.ResumeBlocks`，
+   事实数据运行时从简历库 / resume.md 读取，不硬编码个人数据；
+2. 选定骨架（`two_column_sidebar` / `banner_card` / `single_column_minimal`）与行业色板，
+   调用 `skeletons.build_document(blocks, skeleton_id, palette_id)` 产出 DOCX；
+3. 页面、字体、配色、分栏、照片、板块由积木统一保证，Agent 按岗位重新组合配色与组件
+   （**禁止旧骨架换色冒充新设计**）；
+4. 照片取自 `00_个人信息/photos/`；
+5. 生成后用 Word COM 实测页数 = 1，再请用户目视确认；
+6. 仅当需要骨架未覆盖的全新版式时，才编写一次性 python-docx 脚本，
+   简历确认后立即删除，不入 Git。

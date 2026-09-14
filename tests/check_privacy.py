@@ -35,6 +35,14 @@ import subprocess
 import sys
 from pathlib import Path
 
+# Windows 控制台默认 GBK，输出 ✅/⚠️/❌ 会抛 UnicodeEncodeError 而中断审计。
+# 尽力把 stdout/stderr 切到 UTF-8；切不动时降级为 errors="replace"，绝不因此崩溃。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+    except (AttributeError, ValueError, OSError):
+        pass
+
 # ---- 通用强标识（与具体用户无关，可入库）----
 GENERIC_STRONG = {
     "手机号": re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)"),
@@ -201,14 +209,25 @@ def collect_findings(repo: Path, terms: list[str]) -> list[Finding]:
         findings += scan(text, f"工作区:{rel}", terms, include_weak=False)
 
     # ---- B. 提交历史中的文件内容 ----
-    for rev in git(repo, "rev-list", "--all").split():
-        for rel in git(repo, "ls-tree", "-r", "--name-only", rev).splitlines():
-            if not rel.strip() or Path(rel).suffix.lower() in SKIP_SUFFIX:
+    # 性能：旧实现对「每个提交的每个文件」各起一次 `git show`，
+    # 提交一多就是 O(提交数 × 文件数) 次子进程，极慢。
+    # 改为 `git log -p --all` 单进程流式输出全部差异（新增行以 + 开头），
+    # 既能扫到历史版本内容，又不丢文件路径上下文（
+    # patch 头里的 `+++ b/<path>` 给出当前文件）。
+    history_text = git(repo, "log", "-p", "--all", "--unified=0",
+                       "--no-color", "--format=%H")
+    if history_text:
+        current_path = "?"
+        for line in history_text.splitlines():
+            if line.startswith("+++ b/"):
+                current_path = line[6:].strip()
                 continue
-            blob = git(repo, "show", f"{rev}:{rel}")
-            if not blob:
-                continue
-            findings += scan(blob, f"历史:{rev[:8]}:{rel}", terms, include_weak=False)
+            # 只扫新增内容（删除行属于旧内容，会在更早的提交里作为新增被扫到）
+            if line.startswith("+") and not line.startswith("+++"):
+                if Path(current_path).suffix.lower() in SKIP_SUFFIX:
+                    continue
+                findings += scan(line[1:], f"历史:{current_path}", terms,
+                                 include_weak=False)
 
     # ---- C. 提交信息 ----
     log = git(repo, "log", "--all", "--format=%H%n%s%n%b")

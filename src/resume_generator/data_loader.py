@@ -188,8 +188,11 @@ def load_personal_data(resume_lib_dir) -> dict:
         data["personal"]["graduation_year"] = fields.get("届别")
         # 照片
         photo_dir = personal_dir / "photos"
-        photos = list(photo_dir.glob("*.jpg")) + list(photo_dir.glob("*.jpeg")) + \
-                 list(photo_dir.glob("*.png")) if photo_dir.exists() else []
+        photos = (
+            list(photo_dir.glob("*.jpg"))
+            + list(photo_dir.glob("*.jpeg"))
+            + list(photo_dir.glob("*.png"))
+        ) if photo_dir.exists() else []
         data["personal"]["photo"] = str(photos[0]) if photos else None
 
     # ===== 01_教育经历 =====

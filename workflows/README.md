@@ -15,8 +15,9 @@
 | 定向简历生成（严格按序流程） | [AGENT.md §六](../AGENT.md) |
 | 经历相关性分级（Highly Relevant → Irrelevant） | [AGENT.md §三](../AGENT.md) 第 13 条 |
 | 设计风格系统（自然语言 → 结构化参数） | [AGENT.md §十一](../AGENT.md) |
-| **渲染层实现规范（内容 → DOCX）** | [AGENT.md §十四](../AGENT.md) + [agent_entry.md §6](../agent_entry.md) |
-| 完成后自检（11 项清单） | [AGENT.md §九](../AGENT.md) |
+| **DOCX 动态生成规范（内容 → DOCX）** | [AGENT.md §十四](../AGENT.md) + [agent_entry.md §5](../agent_entry.md) |
+| 临时脚本管理（用后即删） | [AGENT.md §十三](../AGENT.md) |
+| 完成后自检（12 项清单） | [AGENT.md §九](../AGENT.md) |
 
 > 面向 AI 的可执行入口是 [agent_entry.md](../agent_entry.md)（自包含，无需读其他文件即可开工）。
 

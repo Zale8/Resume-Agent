@@ -16,8 +16,9 @@
 
 2. **看简历库**：`../简历库/`（仓库外，个人数据，禁止入 Git）。
 
-3. **生成简历的方式（v0.3 起）**：产品**没有模板库**。Agent 按 JD + 设计偏好
-   编写一次性 python-docx 脚本动态生成 DOCX（见第 5 节），简历确认后删除脚本。
+3. **生成简历的方式（v0.4 起）**：产品**没有模板库**，但有**通用排版积木 + 三种骨架**。
+   Agent 按 JD + 设计偏好选定骨架与色板，复用 `layout_kit` / `skeletons`
+   动态构建 DOCX（见第 5 节）；仅当骨架未覆盖全新版式时才写一次性脚本，用后即删。
 
 4. **任何时候不确定边界**：查 [AGENT.md](AGENT.md)（红线/目录/流程/自检）。
 
@@ -157,37 +158,66 @@
 
 ---
 
-## 5. DOCX 动态生成规范（v0.3 核心流程）
+## 5. DOCX 动态生成规范（v0.4 核心流程）
 
 > 详细红线见 AGENT.md §十四。这里是执行步骤。
+> v0.4 已沉淀**通用排版积木**（`layout_kit.py`）与**三种骨架**（`skeletons.py`）：
+> 生成时必须复用它们，**禁止复制上一份公司的生成脚本只改颜色**。
 
 ### 5.1 执行步骤
 
 1. **内容确认**：resume.md 与用户确认（事实零改动空间）。
-2. **确定设计**：骨架 + 配色 + 字体 + 照片形态（第 3 节 + style_preferences）。
-3. **编写一次性脚本**（系统临时目录，**不进仓库**）：
-   - `from docx import Document`（python-docx；doctor 已检测）；
-   - 页面 A4、页边距、样式、板块、表格、照片、色块全部代码构建；
-   - **所有事实数据运行时从简历库读取**（data_loader / resume.md），公司/岗位/日期走 argv 参数；
-   - 脚本里不得出现硬编码姓名、电话、经历。
-   - 可 `sys.path.insert(0, "<产品仓库>/src")` 复用 `resume_generator.data_loader / paths`。
-4. **输出**：`简历库/09_岗位定制简历/公司/岗位/日期/姓名_公司_岗位.docx`。
-5. **单页实测**：Word/WPS COM `doc.ComputeStatistics(2)` 读真实页数：
+2. **确定设计**：先选**骨架**，再选**色板**（第 3 节 + style_preferences）。
+3. **组装 `ResumeBlocks`**（**不进仓库**的一次性脚本/临时代码）：
+   - `sys.path.insert(0, "<产品仓库>/src")` 复用 `resume_generator`；
+   - 用 `data_loader` 或直接读 resume.md，把内容填入 `layout_kit.ResumeBlocks`；
+   - **所有事实数据运行时从简历库读取**，公司/岗位/日期走 argv 参数；
+   - **不得出现硬编码姓名、电话、经历**。
+4. **构建 DOCX**：
+   ```python
+   from resume_generator.skeletons import build_document
+   doc = build_document(blocks, skeleton_id, palette_id)  # 先定骨架，再定色板
+   doc.save(out_path)                                      # 输出到 09 目录
+   ```
+   - 骨架 ID：`two_column_sidebar` / `banner_card` / `single_column_minimal`；
+   - 色板 ID：`tech_navy` / `pharma_teal` / `finance_gold` / `education_warm` /
+     `manufacturing_steel` / `minimal_ink`（不传则用骨架默认色板）；
+   - 可用 `layout_kit.describe_kit()` 打印全部可选骨架与色板。
+5. **输出**：`简历库/09_岗位定制简历/公司/岗位/日期/姓名_公司_岗位.docx`。
+6. **单页实测**：Word/WPS COM `doc.ComputeStatistics(2)` 读真实页数：
    - = 1 → 通过；
-   - > 1 → 按 1.6 优先级删内容/收间距重生成（正文不低于 9pt），反复到 = 1。
+   - > 1 → 按 1.6 优先级删内容/收间距重新 `build_document`（正文不低于 9pt），反复到 = 1；
    - 无 Word 时用 `python scripts/check_pages.py 成品.docx` 估算，再请用户目视确认。
-6. **视觉确认**：无头浏览器截 HTML 预览，或请用户打开 docx 确认配色/照片/分页。
-7. **写 generation_notes.md**：公司/岗位、JD、版式设计（骨架/配色/字体/照片处理）、
+7. **视觉确认**：无头浏览器截 HTML 预览，或请用户打开 docx 确认配色/照片/分页。
+8. **写 generation_notes.md**：公司/岗位、JD、版式设计（骨架/配色/字体/照片处理）、
    选取与删除的内容、优化逻辑、实测页数、待补充项。
-8. **删除临时脚本**，确认仓库内无残留。
+9. **清理临时脚本**，确认仓库内无残留。
+
+### 5.1.1 什么时候可以不只用骨架
+
+三种骨架是**已验证的起点**，不是必须照搬的模板。以下情况才编写一次性 python-docx 脚本：
+
+- 需要骨架未覆盖的**全新版式**（如时间轴、双栏非对称、卡片矩阵）；
+- 用户明确指定了与三种骨架都不同的结构。
+
+即使如此，仍应尽量复用 `layout_kit` 的原语（`setup_a4` / `set_run_font` /
+`insert_photo` / 色板等），**禁止自建一套与积木并行的样式系统**。
+该脚本用后即删（§5.1 第 9 步 / AGENT.md §十三）。
 
 ### 5.2 版式硬约束（生成时逐条满足）
 
 - A4 严格 1 页；基本信息在首行/顶部；照片尺寸合适；合适的背景/强调色。
 - 中文字体使用用户机器已装字体；字号层级清晰（正文通常 9.5–12pt）。
 - 不缩字号硬塞内容；不靠虚报数据撑篇幅。
+- **先定骨架再定色板，版式组件按岗位重新组合**；换色不算新设计。
 
-### 5.3 诚实说明能力边界
+### 5.3 自测（写积木相关代码后）
+
+```bash
+python tests/smoke_layout_kit.py   # 用虚构人物验证三种骨架能产出 DOCX（需 python-docx）
+```
+
+### 5.4 诚实说明能力边界
 
 - 动态排版通常需要 1–3 轮微调，不承诺一次完美；
 - 页数以 COM 实测为准；最终以用户目视确认为准；
@@ -203,7 +233,7 @@
 | 「这是 JD」 | 存 `11_岗位JD/` → ① 结构化（14）→ ② 匹配分析（13） |
 | 「我匹配吗」 | 读 JD + 全库资产 → Strong/Partial/Gap/Transferable 报告 |
 | 「生成简历」 | resume.md 内容层 → 确认 → 动态生成 DOCX → 单页实测 → 交付 → 删脚本 |
-| 「换个风格/太丑」 | 改设计重生成；事实层不动 |
+| 「换个风格/太丑」 | 改骨架/色板重新 `build_document`；事实层不动 |
 | 「改个电话/学校」 | 重要事实：先确认 → 订正事实层 → 重新生成 |
 | 「检查产品」 | `python gen.py doctor` / `python gen.py check-library` |
 
@@ -212,9 +242,10 @@
 ## 7. 运维命令
 
 ```bash
-python gen.py doctor            # 环境 / 路径 / 简历库 / python-docx 依赖体检
+python gen.py doctor            # 环境 / 路径 / 简历库 / python-docx 依赖体检（含积木就位检查）
 python gen.py check-library     # 11/14/13/09 四阶段产物一致性校验
 python scripts/check_pages.py <docx路径>   # 无 Word 时的页数估算（需 python-docx）
+python tests/smoke_layout_kit.py           # 验证三种骨架可产出 DOCX（虚构数据，需 python-docx）
 python tests/check_privacy.py   # 提交前隐私审计（工作区+全部历史）
 ```
 
@@ -236,10 +267,11 @@ Resume-Agent/
 ├── AGENT.md               # 最高规范
 ├── agent_entry.md         # 本文件
 ├── PRD.md  README.md  CHANGELOG.md
-├── src/resume_generator/  # paths.py（路径发现）+ data_loader.py（只读解析简历库）
+├── src/resume_generator/  # paths 路径发现 + data_loader 只读解析
+│                         # + layout_kit 排版积木 + skeletons 三种骨架
 ├── prompts/               # jd_analyst / matcher / expression_optimizer / resume_writer
 ├── scripts/check_pages.py # 通用页数估算
-├── skills/ workflows/ docs/ tests/
+├── skills/ workflows/ docs/ tests/   # tests 含 smoke_layout_kit.py
 ```
 
 ---

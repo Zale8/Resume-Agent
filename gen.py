@@ -15,9 +15,9 @@
 
 DOCX 成品怎么来？
 -----------------
-本产品**不内置固定模板库**。每份定向简历由 Agent 按 JD 与设计偏好
-动态编写一次性 python-docx 脚本直接生成（用后即删），详见
-agent_entry.md 第 6 节「DOCX 动态生成规范」。
+本产品**不内置固定模板库**。每份定向简历由 Agent 选定骨架（skeletons）与
+行业色板，把内容填入 layout_kit.ResumeBlocks 后动态构建 DOCX
+（用后即删任何临时脚本），详见 agent_entry.md 第 5 节「DOCX 动态生成规范」。
 """
 from __future__ import annotations
 
@@ -25,6 +25,14 @@ import argparse
 import importlib.util
 import sys
 from pathlib import Path
+
+# Windows 控制台默认 GBK，输出 ✅/⚠️/❌/分隔线会抛 UnicodeEncodeError 而中断体检。
+# 尽力把 stdout/stderr 切到 UTF-8；切不动时降级为 errors="replace"，绝不因此崩溃。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+    except (AttributeError, ValueError, OSError):
+        pass
 
 # 让脚本在任意 cwd 下都能 import 到 src/ 里的包
 _SRC = Path(__file__).resolve().parent / "src"
@@ -113,9 +121,16 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     head("4. DOCX 生成依赖（动态生成简历时使用，体检本身不需要）")
     ok("本 CLI 零第三方依赖（仅标准库）")
     if importlib.util.find_spec("docx") is not None:
-        ok("python-docx 已安装 —— Agent 可直接动态生成 DOCX")
+        ok("python-docx 已安装 —— 可调用 layout_kit / skeletons 生成 DOCX")
     else:
         warn("未检测到 python-docx —— 生成简历前需安装：pip install python-docx")
+    kit = root / "src" / "resume_generator" / "layout_kit.py"
+    skel = root / "src" / "resume_generator" / "skeletons.py"
+    if kit.is_file() and skel.is_file():
+        ok("排版积木 layout_kit.py + 三种骨架 skeletons.py 已就位")
+    else:
+        bad("缺少 src/resume_generator/layout_kit.py 或 skeletons.py")
+        problems += 1
     if importlib.util.find_spec("win32com") is not None:
         ok("pywin32 已安装 —— 可用 Word COM 实测真实页数（可选，仅 Windows）")
     else:
@@ -123,7 +138,8 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
     head("体检结论")
     if problems == 0:
-        print("  🎉 全部通过。生成简历请按 agent_entry.md 第 6 节由 Agent 动态生成。")
+        print("  🎉 全部通过。生成简历请按 agent_entry.md 第 5 节："
+              "选定骨架 + layout_kit 动态构建 DOCX。")
         return 0
     print(f"  发现 {problems} 处问题，请按上面的提示修复。")
     return 1
@@ -178,13 +194,25 @@ def cmd_check_library(args: argparse.Namespace) -> int:
     for files in per_stage.values():
         all_keys.update(files)
 
-    print(f"\n  发现 {len(all_keys)} 个岗位记录\n")
+    orphan_resumes = _resume_dir_keys(resume_dir)
+    unmatched = {k for k in orphan_resumes if not _key_matches_company(k, all_keys)}
+
+    print(f"\n  发现 {len(all_keys)} 个岗位记录（按 JD/分析文件名）")
+    if unmatched:
+        print(f"  另有 {len(unmatched)} 个 09 成品目录未对应到 11/13/14 文件名：")
+        for k in sorted(unmatched):
+            print(f"      · {k}")
+
+    print()
 
     header = f"  {'岗位':<40}" + "".join(f"{label:<10}" for label, _, _ in stages) + "成品"
     print(header)
     print("  " + "-" * (len(header) + 2))
 
     problems: list[str] = []
+    if unmatched:
+        for k in sorted(unmatched):
+            problems.append(f"{k}：09 有目录但缺对应 JD/分析文件（请补 11 或核对公司名）")
     for key in sorted(all_keys):
         cells = []
         for label, _, _ in stages:
@@ -201,6 +229,8 @@ def cmd_check_library(args: argparse.Namespace) -> int:
         for (label, folder, _), has in zip(stages, cells):
             if has == "✗":
                 problems.append(f"{key}：缺{label}（{folder.name}/）")
+        if cells[-1] == "✗":
+            problems.append(f"{key}：缺成品 DOCX（09_岗位定制简历/）")
 
     head("结论")
     if not problems:
@@ -222,11 +252,35 @@ def cmd_check_library(args: argparse.Namespace) -> int:
           "                → 成品 DOCX")
     print()
     print("  修复建议：")
-    print("      · 缺「结构化」：重新做 JD 结构化分析；若匹配分析里已含岗位能力模型，"
-          "可暂不补")
+    print("      · 缺「结构化」：按 prompts/jd_analyst.md 补 14_JD结构化分析")
     print("      · 缺「匹配分析」：执行「这个岗位我匹配吗？」流程")
-    print("      · 缺「成品」：由 Agent 按 agent_entry.md 第 5 节动态生成")
-    return 0
+    print("      · 缺「成品」：由 Agent 按 agent_entry.md 第 5 节选用骨架生成")
+    print("      · 09 有目录但无 JD：把当日 JD 原文补进 11_岗位JD/")
+    return 1
+
+
+def _resume_dir_keys(resume_dir: Path) -> list[str]:
+    """09_岗位定制简历/公司/岗位/ → 公司_岗位（不含日期）。"""
+    keys: list[str] = []
+    if not resume_dir.is_dir():
+        return keys
+    for company in resume_dir.iterdir():
+        if not company.is_dir():
+            continue
+        for role in company.iterdir():
+            if role.is_dir():
+                keys.append(f"{company.name}_{role.name}")
+    return keys
+
+
+def _key_matches_company(resume_key: str, jd_keys: set[str]) -> bool:
+    """JD stem 为 YYYY-MM-DD_公司_岗位，09 为 公司_岗位。"""
+    company = resume_key.split("_", 1)[0]
+    for jk in jd_keys:
+        parts = jk.split("_")
+        if len(parts) >= 2 and (parts[1] == company or company in parts[1] or parts[1] in company):
+            return True
+    return False
 
 
 def _has_deliverable(resume_dir: Path, key: str) -> bool:

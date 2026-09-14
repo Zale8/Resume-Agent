@@ -20,8 +20,16 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 from typing import Iterable, Optional
+
+# Windows 控制台默认 GBK，describe_paths() 里的 ❌ 会抛 UnicodeEncodeError。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+    except (AttributeError, ValueError, OSError):
+        pass
 
 # 简历库根目录的候选名称（中文默认 + 英文兼容）
 LIB_DIR_NAMES = ("简历库", "resume_lib", "resume-library", "resume_lib_data", "data")
@@ -142,7 +150,7 @@ def find_product_root(start: Optional[Path] = None) -> Path:
 
     for s in starts:
         for base in _ancestors(s):
-            if any((base / m).exists() for m in ROOT_MARKERS):
+            if any((base / m).is_file() for m in ROOT_MARKERS):
                 return base
 
     # 兜底：src/resume_generator/paths.py -> 上溯三级 = 仓库根

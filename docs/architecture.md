@@ -1,7 +1,8 @@
 # 架构说明：代码目录与简历数据目录分离
 
 > v0.1 起生效。核心原则：**Git 仓库只存产品，个人数据只存本地。**
-> v0.2 曾追加固定模板渲染层；**v0.3 已移除模板库，改为 Agent 动态生成 DOCX**（见第五节）。
+> v0.2 曾追加固定模板渲染层；**v0.3 已移除模板库，改为 Agent 动态生成 DOCX**；
+> **v0.4 沉淀通用排版积木 layout_kit + 三种骨架 skeletons（不含任何成品版式）**（见第五节）。
 
 ## 一、目录拓扑
 
@@ -17,6 +18,7 @@
 │   ├── gen.py                 ← 运维 CLI（doctor / check-library，零依赖）
 │   ├── .gitignore
 │   ├── src/                   ← 产品代码：paths 路径发现 + data_loader 只读解析
+│   │                             + layout_kit 排版积木 + skeletons 三种骨架
 │   ├── prompts/               ← Agent 提示词（方法论，不含个人数据）
 │   ├── scripts/               ← 通用工具（check_pages.py 页数估算）
 │   ├── skills/                ← 技能模块（产品能力封装）
@@ -58,6 +60,7 @@
 | 通用工具 | `Resume-Agent/scripts/` | ✅ |
 | 工作流规范 | `Resume-Agent/workflows/` | ✅ |
 | 固定简历模板 | —— | ❌ v0.3 起不保存模板；版式每次动态生成 |
+| 通用排版积木 / 骨架 | `Resume-Agent/src/resume_generator/layout_kit.py`、`skeletons.py` | ✅ 只含通用原语与布局思路，无个人事实、无成品版式 |
 | 配置（产品侧） | `.gitignore` 等 | ✅ |
 | 文档 | `Resume-Agent/docs/`、`README/PRD/CHANGELOG` | ✅ |
 | 个人信息/教育/实习/项目/技能 | `简历库/` | ❌ |
@@ -77,7 +80,7 @@
 1. **物理隔离**：简历库在 Git 仓库目录之外，`git add` 永远扫不到
 2. **.gitignore 规则**：仓库内仍保留 `data/ jd/ analysis/ generated/ config/` 等路径的忽略规则，防止误建目录后误提交
 
-## 五、DOCX 生成层架构（v0.3 重写）
+## 五、DOCX 生成层架构（v0.4 重写）
 
 ### v0.2 固定模板路线为什么被废弃
 
@@ -94,7 +97,7 @@ v0.2 的链路是 `templates/*/template.docx（{{FIELD}} 占位符）+ resume.md
 template_kit 及 3 个相关 smoke 测试一并移除，Git 历史可查），**每份简历由 Agent
 自行生成**。
 
-### v0.3 数据流
+### v0.4 数据流
 
 ```
 简历库/00~08（INPUT，只读）
@@ -104,17 +107,20 @@ resume.md（AI 产出并经用户确认的内容层）
 99_配置/style_preferences.md（设计偏好）
         │
         ▼
-Agent 编写「一次性 python-docx 脚本」（系统临时目录，不入库）
+Agent 选定骨架 + 行业色板，组装 ResumeBlocks（事实数据运行时读取）
    ├── data_loader / paths   运行时读取事实与定位简历库
-   ├── 版式代码               页面/字体/配色/分栏/表格/照片/色块，按本次设计构建
-   └── argv 参数              公司/岗位/日期，不硬编码
+   ├── layout_kit             页面/字体/色板/照片/间距等通用原语
+   └── skeletons.build_document(blocks, skeleton_id, palette_id)
         │
         ▼
 简历库/09_岗位定制简历/{公司}/{岗位}/{日期}/姓名_公司_岗位.docx（OUTPUT）
         │
         ▼
-Word COM ComputeStatistics(2) 实测页数 = 1 → 用户目视确认 → 删除临时脚本
+Word COM ComputeStatistics(2) 实测页数 = 1 → 用户目视确认
 ```
+
+> 仅当需要骨架未覆盖的全新版式时，才编写一次性 python-docx 脚本
+> （系统临时目录、不入库、用后即删）。
 
 **OUTPUT 永不回流为 INPUT**（见 [AGENT.md §十二](../AGENT.md)）。
 
@@ -123,18 +129,19 @@ Word COM ComputeStatistics(2) 实测页数 = 1 → 用户目视确认 → 删除
 | 层 | 依赖 | 说明 |
 |---|---|---|
 | 运维 CLI（gen.py / check_privacy） | 仅 Python 3.8+ 标准库 | 零依赖，任意机器可体检 |
-| DOCX 构建（一次性脚本） | `python-docx` | 生成必需；doctor 检测并提示安装 |
-| 页数实测（一次性脚本） | Word/WPS + `pywin32` | 可选，Windows 本机最可靠 |
+| DOCX 骨架构建（layout_kit / skeletons） | `python-docx` | 生成必需；doctor 检测并提示安装；未安装时模块仍可 import（色板/骨架元数据可用） |
+| 一次性版式脚本（仅特殊需求时） | `python-docx` | 同样生成必需；脚本用后即删 |
+| 页数实测 | Word/WPS + `pywin32` | 可选，Windows 本机最可靠 |
 | 无 Word 时估算 | `scripts/check_pages.py` | 通用近似估算 |
 
 ### 为什么动态生成不违背「可复现 / 可换人」
 
-- **可换人**：脚本不含任何个人事实，数据全部运行时从简历库读取；换简历库即换人，不改产品。
+- **可换人**：`ResumeBlocks` 与脚本均不含任何个人事实，数据全部运行时从简历库读取；换简历库即换人，不改产品。
 - **可追溯**：每次生成的 resume.md + generation_notes.md（含版式设计、取舍、实测页数）
   存在岗位目录；产品侧规范（AGENT §十四 / agent_entry §5）保证每次生成行为一致。
-- **不污染仓库**：一次性脚本放临时目录、用后即删，公司/岗位特定信息永远不进 Git。
-- 版式是**个人产物**（随岗位变化），产品沉淀的是设计范式（双栏/横幅卡/单栏极简）
-  与通用规范，而不是 docx 文件。
+- **不污染仓库**：积木与骨架是通用产品；任何含公司/岗位信息的一次性脚本放临时目录、用后即删。
+- 版式是**个人产物**（随岗位变化），产品沉淀的是设计范式（双栏/横幅卡/单栏极简）、
+  通用排版原语与行业色板，而不是 docx 文件。
 
 ### 单页校验
 
@@ -212,15 +219,17 @@ python commit.py -m "docs: 更新说明" --all     # 先 add -A 再提交
 **结论：删除文件不等于删除历史。** 任何涉及个人数据的提交都必须假设
 「它会永久留在历史里」，因此必须在提交前阻断，而不是事后清理。
 
-## 七、跨用户通用性（v0.3 口径）
+## 七、跨用户通用性（v0.4 口径）
 
 v0.2 曾用 `tests/smoke_other_user.py` 端到端验证「换人 / 换位置 / 不改代码」；
-v0.3 渲染流水线移除后该测试同步删除。通用性改由以下机制保证（可随时人工复核）：
+v0.3 渲染流水线移除后该测试同步删除。v0.4 通用性改由以下机制保证（可随时人工复核）：
 
 1. `paths.py` 自动发现简历库（支持 `--lib` / `RESUME_LIB`、任意目录名）——`gen.py doctor` 验证；
 2. `data_loader.py` 只读解析简历库，产品代码内零个人数据——`tests/check_privacy.py` 审计；
-3. **一次性生成脚本禁止硬编码任何个人事实**，数据运行时读取、公司/岗位走参数
-   （AGENT.md §十三/§十四）；换人 = 换简历库，产品代码与规范零改动。
+3. **通用积木禁止硬编码任何个人事实**：`layout_kit` / `skeletons` 只提供排版原语与骨架，
+   数据由调用方填入 `ResumeBlocks`，公司/岗位走参数（AGENT.md §十三/§十四）；
+   `tests/smoke_layout_kit.py` 用虚构人物验证三种骨架可产出 DOCX；
+4. 换人 = 换简历库，产品代码与规范零改动。
 
 ## 八、历史教训（依赖与可移植性）
 
@@ -234,7 +243,12 @@ v0.2 处理：删除 `render_templates.py` / `gen_template_configs.py` / `reproc
 
 v0.3 再处理：实践证明固定模板槽位会丢内容、满意版式均来自动态生成，
 故删除 `templates/` 与 `docx_engine.py` / `resume_map.py` / `template_kit.py`，
-改为 Agent 一次性 python-docx 脚本动态生成（用后即删），规范固化于
+改为 Agent 动态排版生成。
+
+v0.4 收尾：为避免每份简历重复编写样板代码与「复制旧脚本只改色」，
+把**通用、与公司无关**的排版原语与三种已验证骨架沉淀为
+`src/resume_generator/layout_kit.py` / `skeletons.py`（不含个人事实、不含成品版式）；
+仅当骨架未覆盖全新版式时才写一次性脚本，规范固化于
 [AGENT.md §十四](../AGENT.md)。`gen.py` 本身仍保持零依赖。
 
 ### 当前可移植性保证

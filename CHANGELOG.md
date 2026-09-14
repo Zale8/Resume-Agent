@@ -2,6 +2,47 @@
 
 本项目的所有重要变更将记录在此文件中。
 
+## v0.4 (2026-09-13) — 沉淀通用排版积木与三种骨架
+
+> 起因：v0.3 删除模板库后，每份简历由 Agent 编写一次性脚本动态生成。
+> 实践发现：脚本里重复了大量页面/字体/色板/照片/间距的样板代码，
+> 且容易「复制上一份公司脚本只改 RGB」。本版本把**通用、与公司无关**
+> 的排版原语与已验证的三种骨架沉淀为产品代码。
+
+### Added
+
+- **`src/resume_generator/layout_kit.py`** — 通用排版积木：
+  - `ResumeBlocks` / `BulletBlock` 内容数据结构（由调用方从简历库填入，本模块不读个人文件）
+  - 页面/字体/间距原语：`setup_a4` / `set_run_font` / `set_paragraph_spacing` /
+    `add_text` / `add_hairline` / `shade_cell` / `set_cell_margins` / `clear_table_borders` /
+    `insert_photo`
+  - 六套行业色板 `PALETTES`（tech_navy / pharma_teal / finance_gold /
+    education_warm / manufacturing_steel / minimal_ink）
+  - `count_pages_com()`（Word COM 实测页数）、`describe_kit()`（列出可选骨架与色板）
+  - `MIN_BODY_PT = 9` 正文下限；未安装 python-docx 时仍可 import（色板/元数据可用）
+- **`src/resume_generator/skeletons.py`** — 三种已验证骨架：
+  `build_document(blocks, skeleton_id, palette_id)`，分别实现
+  双栏侧边栏式 / 横幅工牌卡式 / 单栏极简编辑风
+- **`tests/smoke_layout_kit.py`** — 用虚构人物（张三）验证三种骨架可产出 DOCX（需 python-docx）
+
+### Changed
+
+- **`agent_entry.md §5` 重写**：明确「先选骨架、再选色板」，
+  给出 `build_document(...)` 调用示例、骨架/色板 ID 清单，
+  以及「什么时候才允许编写一次性脚本」（仅骨架未覆盖的全新版式）；
+  一次性脚本仍须尽量复用 layout_kit 原语，用后即删
+- **`gen.py doctor`**：检测 `layout_kit.py` / `skeletons.py` 是否就位；
+  docstring 与结论文案改为「选定骨架 + layout_kit 动态构建」
+- **版本统一为 v0.4**：README / PRD / src/README / architecture 等由「v0.3 当前版本」
+  更新为「v0.4 当前版本」，v0.4 由「未来规划」改为「已实现」
+- `prompts/resume_writer.md` 的「与 DOCX 动态生成的衔接」改为复用积木 + 骨架
+
+### 说明（骨架 ≠ 模板）
+
+骨架只提供**布局思路与通用组件**，配色/字体/组件必须按本次岗位重新组合。
+「旧骨架换色冒充新设计」被明确禁止（见 layout_kit 顶部与 agent_entry §5.2）。
+产品仓库仍**不含任何成品版式或公司特定脚本**。
+
 ## v0.3 (2026-09-13) — 删除模板库，简历由 Agent 动态生成
 
 > 起因（用户明确决策）：「把 templates 删掉，以后不要从里面挑选模板生成了，自行生成。」
@@ -381,29 +422,6 @@
   - AGENT.md 新增「数据与 Git 管理规则」章节，自检清单新增「数据隔离」项
   - Git 提交类型移除 resume/jd（个人数据不入 Git），保留 feat/update/fix/style/docs
 - **重建 Git 历史**：初版曾误将个人数据提交入库，本次重建仓库确保个人数据从未进入任何提交
-
-## v0.1.0 (2026-09-08)
-
-### Added
-
-- Resume Agent 项目初始化
-- 简历资产库分类规范（个人信息/教育/经历/项目/技能/证书/自我评价）
-- JD 管理与文件规范（YYYY-MM-DD_公司_岗位.md）
-- JD 结构化分析规范（工作职责/任职要求/关键词/岗位能力模型）
-- 匹配分析规范（Strong/Partial/Gap/Transferable + 突出/弱化/删除/补充）
-- 模板系统（template_01 稳重正式 / template_02 极简科技 占位配置）
-- 定向简历生成规范（resume.md + generation_notes.md）
-- 用户偏好与设计风格配置规范
-- 三层内容体系（事实层 / 专业表达层 / 岗位定制层）
-- 完成后自检清单
-- 核心文档：README.md / PRD.md / AGENT.md
-
-### Not Included
-
-- 自动网申
-- 自动投递
-- 招聘网站自动化
-
 
 ## v0.1.0 (2026-09-08)
 
