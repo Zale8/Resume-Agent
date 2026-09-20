@@ -6,11 +6,12 @@
 
 本文件不含任何用户个人信息，不含任何绝对路径。
 
-发现顺序（先命中先返回）：
+发现顺序（先命中先返回；同层精确名优先于多用户模式名）：
     1. 环境变量 RESUME_LIB（显式指定，便于 CI / 多简历库）
     2. 从「当前工作目录」逐级向上查找
     3. 从「本文件所在目录」逐级向上查找
-    4. 召回库候选名：简历库 / resume_lib / resume-library / data
+    4. 召回库候选名：简历库 / resume_lib / resume-library / data，
+       以及多用户命名模式「*_简历库」（如 张丙涵_简历库）
 
 用法：
     from resume_generator.paths import find_resume_lib, find_project_root
@@ -33,6 +34,9 @@ for _stream in (sys.stdout, sys.stderr):
 
 # 简历库根目录的候选名称（中文默认 + 英文兼容）
 LIB_DIR_NAMES = ("简历库", "resume_lib", "resume-library", "resume_lib_data", "data")
+
+# 多用户简历库命名模式（如「张丙涵_简历库」）；精确名优先，模式兜底
+LIB_DIR_PATTERNS = ("*_简历库", "*_resume_lib", "*_resume-library")
 
 # 产品仓库自身的标志文件（用于定位 project root）
 ROOT_MARKERS = ("AGENT.md", "agent_entry.md", "PRD.md")
@@ -71,13 +75,47 @@ def _ancestors(start: Path) -> Iterable[Path]:
 
 
 def _search_from(start: Path, names: Iterable[str]) -> Optional[Path]:
-    """从 start 向上逐级查找候选目录。"""
+    """从 start 向上逐级查找候选目录（精确名优先，模式名兜底）。"""
     for base in _ancestors(start):
         for name in names:
             candidate = base / name
             if _looks_like_resume_lib(candidate):
                 return candidate
+        # 再按模式匹配多用户库（如「张三_简历库」），同层精确名优先
+        for pattern in LIB_DIR_PATTERNS:
+            for candidate in sorted(base.glob(pattern)):
+                if _looks_like_resume_lib(candidate):
+                    return candidate
     return None
+
+
+def find_all_resume_libs(
+    start: Optional[Path] = None,
+    extra_search_roots: Optional[Iterable[Path]] = None,
+) -> list[Path]:
+    """找出搜索路径上所有可识别的简历库（去重，供歧义检测 / doctor 使用）。"""
+    starts = []
+    if start is not None:
+        starts.append(Path(start))
+    starts.append(Path.cwd())
+    starts.append(Path(__file__).resolve().parent)
+    if extra_search_roots:
+        starts.extend(Path(p) for p in extra_search_roots)
+
+    found: list[Path] = []
+    seen: set[Path] = set()
+    for s in starts:
+        for base in _ancestors(s):
+            candidates = [base / name for name in LIB_DIR_NAMES]
+            for pattern in LIB_DIR_PATTERNS:
+                candidates.extend(sorted(base.glob(pattern)))
+            for cand in candidates:
+                if _looks_like_resume_lib(cand):
+                    resolved = cand.resolve()
+                    if resolved not in seen:
+                        seen.add(resolved)
+                        found.append(resolved)
+    return found
 
 
 def find_resume_lib(
@@ -177,6 +215,14 @@ def describe_paths() -> str:
     lines = [f"cwd            : {Path.cwd()}"]
     lines.append(f"product_root   : {find_product_root()}")
     lines.append(f"{ENV_VAR:<15}: {os.environ.get(ENV_VAR, '(未设置)')}")
+    # 歧义检测：搜索路径上存在多个简历库时显式提示，避免静默用错库
+    all_libs = find_all_resume_libs()
+    if len(all_libs) > 1:
+        lines.append("")
+        lines.append(f"⚠️  发现 {len(all_libs)} 个简历库（自动发现取第一个）：")
+        for lib in all_libs:
+            lines.append(f"  - {lib}")
+        lines.append(f"多库投递时请用 --lib 或环境变量 {ENV_VAR} 显式指定。")
     try:
         lines.append(f"resume_lib     : {resolve_lib()}")
     except ResumeLibNotFound as exc:

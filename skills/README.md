@@ -2,21 +2,21 @@
 
 > 本目录是 Resume Agent 的技能资产区，**可以进入 Git**。
 
-## 用途
+## 计划中的技能（尚未实现）
 
-存放可复用的 Skill（封装好的多步工作流能力），例如：
+以下技能在设计中，逻辑目前以 Prompt + AGENT.md 工作流规范形式维护：
 
-| Skill | 说明 |
-|---|---|
-| `intake-experience` | 录入经历：对话采集 → 事实/表达分层 → 分类入库 |
-| `analyze-jd` | JD 处理：保存原文 → 结构化分析 → 岗位能力模型 |
-| `match-jd` | 匹配分析：检索资产库 → Strong/Partial/Gap/Transferable |
-| `generate-resume` | 定向生成：匹配筛选 → 表达优化 → 选骨架 + 色板动态排版 → 出稿 + notes |
-| `style-tune` | 设计风格：自然语言偏好 → 结构化设计参数（骨架/色板选用） |
+| 计划 Skill | 对应 Prompt / 规范 | 状态 |
+|---|---|---|
+| `intake-experience` | `prompts/expression_optimizer.md` + AGENT.md §四 | 以 Prompt 形式运行 |
+| `analyze-jd` | `prompts/jd_analyst.md` + AGENT.md §七 | 以 Prompt 形式运行 |
+| `match-jd` | `prompts/matcher.md` + AGENT.md §七 | 以 Prompt 形式运行 |
+| `generate-resume` | `prompts/resume_writer.md` + AGENT.md §六/§十四 | 以 Prompt 形式运行 |
+| `style-tune` | AGENT.md §十一 + `简历库/99_配置/` | 以对话形式运行 |
 
-## MVP v0.1 状态
+## MVP v0.4 状态
 
-技能逻辑以工作流规范形式维护在 [workflows/](../workflows/README.md) 与 [AGENT.md](../AGENT.md)，本目录暂为空，待流程稳定后封装。
+技能逻辑以 Prompt + 工作流规范形式维护在 [prompts/](../prompts/)、[workflows/](../workflows/README.md) 与 [AGENT.md](../AGENT.md)，本目录暂无实现文件。待流程稳定后封装为独立 Skill 文件。
 
 ## 红线
 

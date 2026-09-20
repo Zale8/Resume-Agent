@@ -1,0 +1,11 @@
+# Resume-Agent 依赖
+#
+# 运维 CLI（gen.py doctor / check-library）零依赖，不需要安装任何包。
+# 以下依赖仅在生成 DOCX 简历时需要。
+#
+# 安装：pip install -r requirements.txt
+
+python-docx>=1.1.0
+
+# 可选：Word COM 实测页数（仅 Windows）
+# pywin32>=306

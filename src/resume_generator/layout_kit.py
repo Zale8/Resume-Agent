@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Optional
 
 # ---------------------------------------------------------------------------
-# 骨架 ID（产品约定，与 agent_entry / 母版映射表一致）
+# 骨架 ID（产品约定，与 agent_entry.md 设计范式一致）
 # ---------------------------------------------------------------------------
 
 SKELETON_SIDEBAR = "two_column_sidebar"
@@ -142,18 +142,67 @@ def setup_a4(doc, margins_cm=(1.2, 1.2, 1.0, 1.0)):
     return sec
 
 
-def set_run_font(run, size_pt, *, bold=False, color="#1A1A1A", name=FONT_CN, italic=False):
-    run.font.name = name
+# ---------------------------------------------------------------------------
+# 几何单一来源（Phase 3A Bug1）
+#
+# 所有表格宽度只能由这条链路算出，禁止 builder 自己写 21 - a - b：
+#     margins ──► usable_width_cm ──► split_columns_cm ──► 列宽
+# 且最后一列吸收浮点误差，保证 sum(列宽) == usable_width。
+# ---------------------------------------------------------------------------
+
+def usable_width_cm(left_margin_cm: float, right_margin_cm: float,
+                    page_width_cm: float = A4_WIDTH_CM) -> float:
+    """页面有效内容宽 = 页宽 - 左边距 - 右边距。"""
+    return page_width_cm - left_margin_cm - right_margin_cm
+
+
+def split_columns_cm(total_width_cm: float, ratios) -> list:
+    """按比例把总宽切成列宽；最后一列吸收舍入误差，保证和恰好等于总宽。"""
+    ratios = list(ratios)
+    if not ratios:
+        raise ValueError("ratios 不能为空")
+    if abs(sum(ratios) - 1.0) > 1e-6:
+        raise ValueError(f"column ratios 之和必须为 1.0，当前={sum(ratios)}")
+    widths = [total_width_cm * r for r in ratios[:-1]]
+    widths.append(total_width_cm - sum(widths))
+    return widths
+
+
+def cell_text_width_cm(cell_width_cm: float, left_margin_cm: float,
+                       right_margin_cm: float) -> float:
+    """单元格文本区宽 = 格宽 - 左内边距 - 右内边距（用于格内右制表位定位）。"""
+    return cell_width_cm - left_margin_cm - right_margin_cm
+
+
+def add_right_tab_stop(paragraph, position_cm: float):
+    """在段落指定位置加右对齐制表位（日期等行尾信息的稳定定位，替代空格推位置）。"""
+    from docx.enum.text import WD_TAB_ALIGNMENT
+    from docx.shared import Cm
+
+    paragraph.paragraph_format.tab_stops.add_tab_stop(
+        Cm(position_cm), WD_TAB_ALIGNMENT.RIGHT)
+
+
+def set_run_font(run, size_pt, *, bold=False, color="#1A1A1A", name=FONT_CN,
+                 italic=False, latin_font: Optional[str] = None):
+    """设置 run 字体/字号/字重/颜色。
+
+    latin_font 提供时：w:ascii/w:hAnsi = latin_font（拉丁字体），
+    w:eastAsia = name（CJK 字体）；None 时三者同写 name（旧路径保值）。
+    run.font.name（python-docx 高层 API）写 latin_font 以让 Latin 文本
+    走正确字体；CJK 文本由 w:eastAsia 接管。
+    """
+    run.font.name = latin_font if latin_font is not None else name
     run.font.size = _pt(size_pt)
     run.bold = bold
     run.italic = italic
     run.font.color.rgb = hex_rgb(color)
-    _east_asia(run, name)
+    _east_asia(run, name, latin_font=latin_font)
 
 
 def set_paragraph_spacing(paragraph, *, before=0, after=0, line=1.08, align=None):
     from docx.enum.text import WD_ALIGN_PARAGRAPH
-    from docx.shared import Pt, Twips
+    from docx.shared import Pt
 
     pf = paragraph.paragraph_format
     pf.space_before = Pt(before)
@@ -167,19 +216,24 @@ def set_paragraph_spacing(paragraph, *, before=0, after=0, line=1.08, align=None
         paragraph.alignment = WD_ALIGN_PARAGRAPH.LEFT
     # 避免 Word 自动段前间距把单页撑爆
     pf.widow_control = True
-    _ = Twips
 
 
 def add_text(paragraph, text, size_pt, **kwargs):
+    # latin_font 由调用方经 kwargs 透传；None → set_run_font 三者同写 name
     run = paragraph.add_run(text)
     set_run_font(run, size_pt, **kwargs)
     return run
 
 
-def add_hairline(doc, color="#E0E0E0"):
-    """段落下发丝线（底边框）。"""
+def add_hairline(doc, color="#E0E0E0", *, before_pt=0.0, after_pt=3.0,
+                 sz="6"):
+    """段落下发丝线（底边框）。
+
+    before_pt / after_pt / sz 为 Phase 3B-3 起可注入的间距/厚度参数，
+    默认值保持工具层历史原值；颜色仍由 Phase 3B-2 Palette 决定。
+    """
     p = doc.add_paragraph()
-    set_paragraph_spacing(p, before=0, after=3, line=1.0)
+    set_paragraph_spacing(p, before=before_pt, after=after_pt, line=1.0)
     pPr = p._p.get_or_add_pPr()
     from docx.oxml import OxmlElement
     from docx.oxml.ns import qn
@@ -187,7 +241,7 @@ def add_hairline(doc, color="#E0E0E0"):
     pBdr = OxmlElement("w:pBdr")
     bottom = OxmlElement("w:bottom")
     bottom.set(qn("w:val"), "single")
-    bottom.set(qn("w:sz"), "6")
+    bottom.set(qn("w:sz"), str(sz))
     bottom.set(qn("w:space"), "1")
     bottom.set(qn("w:color"), color.lstrip("#"))
     pBdr.append(bottom)
@@ -308,24 +362,287 @@ def clear_table_borders(table):
     tblPr.append(borders)
 
 
-def insert_photo(paragraph, photo_path: Optional[str], width_cm: float, height_cm: Optional[float] = None):
-    """插入证件照。路径无效则跳过（由调用方事先校验）。"""
+@dataclass
+class PhotoInsertResult:
+    """照片插入结果（Phase 3A Bug3）。
+
+    status:
+        inserted_equal        目标盒与源图同比例，等比铺满
+        inserted_contain      比例不一致，已等比缩放进盒（盒内留白，未变形、未裁剪）
+        inserted_width_only   未给目标高，按宽等比（python-docx 自动保比例）
+        missing               路径为空或文件不存在，已安全跳过
+        distorted_forced      调用方显式 preserve_aspect=False（危险，需知情）
+    兼容旧代码：bool(result) == ok。
+    """
+
+    status: str
+    ok: bool = False
+    target_width_cm: Optional[float] = None
+    target_height_cm: Optional[float] = None
+    applied_width_cm: Optional[float] = None
+    applied_height_cm: Optional[float] = None
+    source_aspect: Optional[float] = None
+    note: str = ""
+
+    def __bool__(self) -> bool:
+        return self.ok
+
+
+def _read_image_aspect(photo_path) -> Optional[float]:
+    """读取源图片宽高比；失败返回 None（不抛异常，保证渲染不被图片问题击垮）。"""
+    try:
+        from docx.image.image import Image
+
+        with open(photo_path, "rb") as f:
+            img = Image.from_blob(f.read())
+        if img.px_height:
+            return img.px_width / img.px_height
+    except Exception:
+        return None
+    return None
+
+
+def insert_photo(paragraph, photo_path: Optional[str], width_cm: float,
+                 height_cm: Optional[float] = None, *,
+                 preserve_aspect: bool = True) -> PhotoInsertResult:
+    """插入证件照（等比保护）。
+
+    - 路径无效：返回 missing，不插入，不抛异常。
+    - preserve_aspect=True（默认，硬规则）：
+        * 只给宽 → 按宽等比；
+        * 给宽+高 → contain 进目标盒（等比缩放，盒内可能留白），
+          绝不强制拉伸；当前 Renderer 不做像素裁剪，留白即安全 fallback。
+    - preserve_aspect=False：调用方明确知情才允许强制宽高（status 会标记）。
+    """
     from docx.shared import Cm
 
     if not photo_path:
-        return False
+        return PhotoInsertResult("missing", note="photo_path 为空，已跳过")
     path = Path(photo_path)
     if not path.is_file():
-        return False
+        return PhotoInsertResult("missing", note=f"照片文件不存在：{path}，已跳过")
+
+    src_ar = _read_image_aspect(path)
+
+    # 只给宽：python-docx 单维度即等比
+    if height_cm is None:
+        run = paragraph.add_run()
+        run.add_picture(str(path), width=Cm(width_cm))
+        applied_h = (width_cm / src_ar) if src_ar else None
+        return PhotoInsertResult(
+            "inserted_width_only", ok=True,
+            target_width_cm=width_cm, target_height_cm=None,
+            applied_width_cm=width_cm, applied_height_cm=applied_h,
+            source_aspect=src_ar,
+            note="未给目标高，按宽等比插入")
+
+    if not preserve_aspect:
+        run = paragraph.add_run()
+        run.add_picture(str(path), width=Cm(width_cm), height=Cm(height_cm))
+        return PhotoInsertResult(
+            "distorted_forced", ok=True,
+            target_width_cm=width_cm, target_height_cm=height_cm,
+            applied_width_cm=width_cm, applied_height_cm=height_cm,
+            source_aspect=src_ar,
+            note="显式关闭等比保护；源比例与目标不一致时人物会变形")
+
+    # 读不到源比例时，退化为只按宽等比（最安全的兜底）
+    if not src_ar:
+        run = paragraph.add_run()
+        run.add_picture(str(path), width=Cm(width_cm))
+        return PhotoInsertResult(
+            "inserted_width_only", ok=True,
+            target_width_cm=width_cm, target_height_cm=height_cm,
+            applied_width_cm=width_cm, applied_height_cm=None,
+            source_aspect=None,
+            note="无法读取源图尺寸，退化为按宽等比（不强制目标高）")
+
+    # contain：按宽高约束中更紧的一边等比缩放，保证不超出目标盒且不变形
+    box_ar = width_cm / height_cm
+    if src_ar > box_ar:
+        applied_w = width_cm
+        applied_h = width_cm / src_ar
+    else:
+        applied_h = height_cm
+        applied_w = height_cm * src_ar
+
     run = paragraph.add_run()
-    kwargs = {"width": Cm(width_cm)}
-    if height_cm is not None:
-        kwargs["height"] = Cm(height_cm)
-    run.add_picture(str(path), **kwargs)
-    return True
+    run.add_picture(str(path), width=Cm(applied_w), height=Cm(applied_h))
+    same = abs(applied_w - width_cm) < 1e-6 and abs(applied_h - height_cm) < 1e-6
+    status = "inserted_equal" if same else "inserted_contain"
+    note = "目标盒与源图同比例" if same else (
+        "源比例与目标盒不一致，已 contain 等比适配（盒内留白，未变形、未裁剪）")
+    return PhotoInsertResult(
+        status, ok=True,
+        target_width_cm=width_cm, target_height_cm=height_cm,
+        applied_width_cm=applied_w, applied_height_cm=applied_h,
+        source_aspect=src_ar, note=note)
 
 
-def count_pages_com(docx_path) -> Optional[int]:
+# ---------------------------------------------------------------------------
+# 浮动照片（wp:anchor；Golden Sample CL-01 产品化，Phase 2B-4 Step 4）
+# ---------------------------------------------------------------------------
+
+_EMU_PER_CM = 360000
+_EMU_PER_PT = 12700
+
+
+def _force_anchor_paragraph_auto_line(paragraph) -> None:
+    """行高保护：浮动照片锚点段禁止 exact/atLeast 行距（会裁切图片）。
+
+    做法：若段落级 spacing 声明了固定行距，移除 line/lineRule 两个属性，
+    让段落回到自动行距（继承样式/默认单倍多倍行距）。
+    """
+    from docx.oxml.ns import qn
+
+    p_pr = paragraph._p.find(qn("w:pPr"))
+    if p_pr is None:
+        return
+    spacing = p_pr.find(qn("w:spacing"))
+    if spacing is None:
+        return
+    if spacing.get(qn("w:lineRule")) in ("exact", "atLeast"):
+        spacing.attrib.pop(qn("w:line"), None)
+        spacing.attrib.pop(qn("w:lineRule"), None)
+
+
+def _apply_picture_border(sp_pr, *, color_hex: str, width_pt: float) -> None:
+    """在 pic:spPr 上写 a:ln 实线边框（CT_ShapeProperties 顺序：ln 位于填充后）。"""
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+
+    ln = OxmlElement("a:ln")
+    ln.set("w", str(int(round(width_pt * _EMU_PER_PT))))
+    ln.set("cap", "flat")
+    ln.set("cmpd", "sng")
+    ln.set("algn", "ctr")
+    solid = OxmlElement("a:solidFill")
+    clr = OxmlElement("a:srgbClr")
+    clr.set("val", color_hex)
+    solid.append(clr)
+    ln.append(solid)
+    dash = OxmlElement("a:prstDash")
+    dash.set("val", "solid")
+    ln.append(dash)
+    sp_pr.append(ln)
+
+
+def insert_floating_photo(paragraph, photo_path: Optional[str], width_cm: float,
+                          height_cm: Optional[float] = None, *,
+                          position_h: str = "column",
+                          position_v: str = "page",
+                          offset_x_cm: float = 0.0,
+                          offset_y_cm: float = 0.0,
+                          border_color: Optional[str] = None,
+                          border_width_pt: float = 0.0,
+                          behind_doc: bool = True,
+                          preserve_aspect: bool = True) -> PhotoInsertResult:
+    """插入浮动照片（wp:anchor）。
+
+    Golden Sample CL-01 产品化：behindDoc=1（衬于文字下方）、
+    wrapTopAndBottom（上下型环绕）、layoutInCell=1（允许锚在表格单元格段）、
+    相对锚点（column/page）+ posOffset（cm→EMU）、图片 a:ln 边框。
+
+    等比策略与 insert_photo 一致（读不到源比例或未给高时按宽等比）；
+    路径无效同样安全跳过。插入后强制锚点段自动行距（exact 会裁图）。
+    """
+    from docx.shared import Cm
+    from docx.oxml import OxmlElement, parse_xml
+    from docx.oxml.ns import nsdecls, qn
+
+    if not photo_path:
+        return PhotoInsertResult("missing", note="photo_path 为空，已跳过")
+    path = Path(photo_path)
+    if not path.is_file():
+        return PhotoInsertResult("missing",
+                                 note=f"照片文件不存在：{path}，已跳过")
+
+    src_ar = _read_image_aspect(path)
+
+    # 等比适配（与 insert_photo 同规则；浮动图同样禁止变形）
+    if height_cm is None or not src_ar:
+        applied_w = width_cm
+        applied_h = (width_cm / src_ar) if src_ar else None
+        fit_note = "未给目标高（或读不到源比例），按宽等比浮动插入"
+    elif not preserve_aspect:
+        applied_w, applied_h = width_cm, height_cm
+        fit_note = "显式关闭等比保护（危险）"
+    else:
+        box_ar = width_cm / height_cm
+        if src_ar > box_ar:
+            applied_w, applied_h = width_cm, width_cm / src_ar
+        else:
+            applied_h, applied_w = height_cm, height_cm * src_ar
+        fit_note = "contain 等比适配浮动盒"
+
+    run = paragraph.add_run()
+    if applied_h is None:
+        run.add_picture(str(path), width=Cm(applied_w))
+    else:
+        run.add_picture(str(path), width=Cm(applied_w), height=Cm(applied_h))
+
+    # 定位刚生成的 wp:inline，并把其 graphic/extent/docPr 搬入 wp:anchor
+    drawing = run._r.find(qn("w:drawing"))
+    inline = drawing.find(qn("wp:inline"))
+    graphic = inline.find(qn("a:graphic"))
+    extent = inline.find(qn("wp:extent"))
+    doc_pr = inline.find(qn("wp:docPr"))
+
+    # 边框：写在 pic:spPr/a:ln（跟随图形，Word/WPS 都能渲染）
+    border_hex = ""
+    if border_color and border_width_pt and border_width_pt > 0:
+        border_hex = str(border_color).strip().lstrip("#").upper()
+        sp_pr = graphic.find(".//" + qn("pic:spPr"))
+        if sp_pr is not None:
+            _apply_picture_border(sp_pr, color_hex=border_hex,
+                                  width_pt=float(border_width_pt))
+
+    anchor = parse_xml(
+        "<wp:anchor %s distT=\"0\" distB=\"0\" distL=\"0\" distR=\"0\" "
+        "simplePos=\"0\" relativeHeight=\"0\" behindDoc=\"%d\" locked=\"0\" "
+        "layoutInCell=\"1\" allowOverlap=\"1\"></wp:anchor>"
+        % (nsdecls("wp", "a"), 1 if behind_doc else 0))
+
+    def _sub(parent, tag, **attrs):
+        el = OxmlElement(tag)
+        for key, val in attrs.items():
+            el.set(key, str(val))
+        parent.append(el)
+        return el
+
+    _sub(anchor, "wp:simplePos", x=0, y=0)
+    pos_h = _sub(anchor, "wp:positionH", relativeFrom=position_h)
+    _sub(pos_h, "wp:posOffset").text = str(
+        int(round(float(offset_x_cm) * _EMU_PER_CM)))
+    pos_v = _sub(anchor, "wp:positionV", relativeFrom=position_v)
+    _sub(pos_v, "wp:posOffset").text = str(
+        int(round(float(offset_y_cm) * _EMU_PER_CM)))
+    anchor.append(extent)                    # 移动：extent
+    _sub(anchor, "wp:effectExtent", l=0, t=0, r=0, b=0)
+    _sub(anchor, "wp:wrapTopAndBottom")
+    anchor.append(doc_pr)                    # 移动：docPr（保持图片 id）
+    _sub(anchor, "wp:cNvGraphicFramePr")
+    anchor.append(graphic)                   # 移动：graphic（含 a:ln）
+
+    drawing.replace(inline, anchor)
+
+    # 行高保护：锚点段强制自动行距
+    _force_anchor_paragraph_auto_line(paragraph)
+
+    return PhotoInsertResult(
+        "inserted_floating", ok=True,
+        target_width_cm=width_cm, target_height_cm=height_cm,
+        applied_width_cm=applied_w, applied_height_cm=applied_h,
+        source_aspect=src_ar,
+        note=(f"浮动锚定 posH={position_h}+{offset_x_cm}cm "
+              f"posV={position_v}+{offset_y_cm}cm "
+              f"behindDoc={int(behind_doc)} wrap=topAndBottom"
+              + (f" border=#{border_hex}@{border_width_pt}pt"
+                 if border_hex else " border=none")
+              + f"；{fit_note}"))
+
+
+def count_pages_com(docx_path: str | Path) -> Optional[int]:
     """Word/WPS COM 实测页数。不可用时返回 None。"""
     path = str(Path(docx_path).resolve())
     try:
@@ -366,7 +683,10 @@ def _pt(size_pt: float):
     return Pt(size_pt)
 
 
-def _east_asia(run, name: str):
+def _east_asia(run, name: str, *, latin_font: Optional[str] = None):
+    """设置 run 的 rFonts。latin_font 提供时 ascii/hAnsi 用拉丁字体、
+    eastAsia 用 name（CJK 字体）；None 时三者同写 name（旧路径行为保值）。
+    """
     from docx.oxml.ns import qn
 
     r = run._element
@@ -377,6 +697,7 @@ def _east_asia(run, name: str):
 
         rFonts = OxmlElement("w:rFonts")
         rPr.append(rFonts)
+    latin = latin_font if latin_font is not None else name
     rFonts.set(qn("w:eastAsia"), name)
-    rFonts.set(qn("w:ascii"), name)
-    rFonts.set(qn("w:hAnsi"), name)
+    rFonts.set(qn("w:ascii"), latin)
+    rFonts.set(qn("w:hAnsi"), latin)

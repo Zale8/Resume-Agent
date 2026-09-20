@@ -32,7 +32,7 @@ python gen.py check-library     # 校验 JD原文/JD结构化/匹配分析/成�
 
 **CLI 零依赖**：`gen.py` 只用 Python 3.8+ 标准库，不需要 `pip install` 即可体检。
 
-**生成 DOCX 需要 python-docx**：Agent 动态生成简历时使用（`pip install python-docx`，
+**生成 DOCX 需要 python-docx**：Agent 动态生成简历时使用（`pip install -r requirements.txt`，
 doctor 会检测，并会提示 `layout_kit.py` / `skeletons.py` 是否就位）；
 实测真实页数可选装 Word/WPS + pywin32（仅 Windows）。
 
@@ -56,7 +56,7 @@ Agent 确定版式：骨架（双栏 / 横幅卡 / 单栏极简）+ 行业配色
       ↓
 生成 DOCX → Word COM 实测页数 = 1 → 用户目视确认
       ↓
-存入 简历库/09_岗位定制简历/{公司}/{岗位}/{日期}/ → 删除临时脚本
+存入 简历库/09_岗位定制简历/{公司}/{岗位}/{日期}/ → 用户定稿确认后自动删除临时脚本
 ```
 
 版式随岗位变化、内容随 JD 重组，但**事实数据全程不变、不虚构**。
@@ -93,7 +93,7 @@ python commit.py -m "feat: xxx"    # 带守卫的提交（先审计后提交）
 └── 简历库/              ← 个人简历数据库（本地，禁止进入 Git）
     ├── 00_个人信息/ 01_教育经历/ 02_实习经历/ 03_项目经历/
     ├── 04_校园经历/ 05_专业技能/ 06_求职意向/ 07_个人优势/
-    ├── 08_证书奖项/ 09_岗位定制简历/ 10_简历母版/
+    ├── 08_证书奖项/ 09_岗位定制简历/
     ├── 11_岗位JD/ 12_投递记录/
     ├── 13_JD分析/（匹配分析） 14_JD结构化分析/（岗位要什么）
     └── 99_配置/（用户偏好 + 设计风格）
@@ -124,6 +124,7 @@ python commit.py -m "feat: xxx"    # 带守卫的提交（先审计后提交）
 Resume-Agent/
 ├── README.md / PRD.md / AGENT.md / CHANGELOG.md / agent_entry.md / .gitignore
 ├── gen.py                    # 运维 CLI：doctor / check-library
+├── requirements.txt          # python-docx 依赖声明
 ├── src/resume_generator/     # 产品代码
 │   ├── paths.py              # 跨平台路径自动发现
 │   ├── data_loader.py        # 简历库只读解析（唯一个人信息读取入口）

@@ -38,7 +38,6 @@
     ├── 07_个人优势/            ← 自我评价
     ├── 08_证书奖项/
     ├── 09_岗位定制简历/        ← 生成产物（generated）
-    ├── 10_简历母版/           ← 3 份母版编排规则（A产品运营 / B AI应用 / C硬件制造）
     ├── 11_岗位JD/             ← JD 原文
     ├── 12_投递记录/
     ├── 13_JD分析/             ← 匹配分析（人岗关系）
@@ -66,7 +65,7 @@
 | 个人信息/教育/实习/项目/技能 | `简历库/` | ❌ |
 | 联系方式/照片 | `简历库/00_个人信息/` | ❌ |
 | JD 原文 / 结构化分析 / 匹配分析 | `简历库/11、14、13` | ❌ |
-| 投递记录 / 生成简历 / 简历母版 | `简历库/12、09、10` | ❌ |
+| 投递记录 / 生成简历 | `简历库/12、09` | ❌ |
 | 用户偏好 | `简历库/99_配置/` | ❌ |
 
 ## 三、产品如何调用个人数据
@@ -80,7 +79,7 @@
 1. **物理隔离**：简历库在 Git 仓库目录之外，`git add` 永远扫不到
 2. **.gitignore 规则**：仓库内仍保留 `data/ jd/ analysis/ generated/ config/` 等路径的忽略规则，防止误建目录后误提交
 
-## 五、DOCX 生成层架构（v0.4 重写）
+## 五、DOCX 生成层架构（v0.4 重写；v0.7 起主链路为 DesignSpec 装配）
 
 ### v0.2 固定模板路线为什么被废弃
 
@@ -97,30 +96,65 @@ v0.2 的链路是 `templates/*/template.docx（{{FIELD}} 占位符）+ resume.md
 template_kit 及 3 个相关 smoke 测试一并移除，Git 历史可查），**每份简历由 Agent
 自行生成**。
 
-### v0.4 数据流
+### 数据流（v0.7 起：Design Decision → DesignSpec → Renderer）
 
 ```
 简历库/00~08（INPUT，只读）
         +
 resume.md（AI 产出并经用户确认的内容层）
         +
-99_配置/style_preferences.md（设计偏好）
+99_配置/style_preferences.md（风格输入 / 参考，不是 renderer 配置）
+        +
+JD 分析 + 用户当次要求 + 照片信息 + 页面/内容预算
         │
         ▼
-Agent 选定骨架 + 行业色板，组装 ResumeBlocks（事实数据运行时读取）
+Agent 确定本份 Design Decision
+（生成前的设计判断：范式 / palette / 照片决策 / 布局取舍；
+  对话内中间决策，不落独立决策文件）
+        │
+        ▼
+按范式加载 Preset（design/presets.py build_p1/p2/p3_spec，范式级默认）
+        + 需要覆盖的字段（未明确字段保持 Preset 默认语义）
+        │
+        ▼
+design.assembly.assemble_job_spec() → validate_spec()（ERROR 拒绝）
+        │
+        ▼
+DesignSpec（正式结构化视觉事实源）
+        │
+        ▼
+skeletons.build_document(blocks, design_spec=spec)
    ├── data_loader / paths   运行时读取事实与定位简历库
    ├── layout_kit             页面/字体/色板/照片/间距等通用原语
-   └── skeletons.build_document(blocks, skeleton_id, palette_id)
+   └── RenderOverrides        DesignSpec 的内部消费载体
         │
         ▼
 简历库/09_岗位定制简历/{公司}/{岗位}/{日期}/姓名_公司_岗位.docx（OUTPUT）
         │
         ▼
 Word COM ComputeStatistics(2) 实测页数 = 1 → 用户目视确认
+        │
+        ▼
+generation_notes.md（生成后 Record：实际设计/参数/页数/QA/调整原因）
 ```
 
-> 仅当需要骨架未覆盖的全新版式时，才编写一次性 python-docx 脚本
-> （系统临时目录、不入库、用后即删）。
+**职责分层**：
+
+| 层 | 职责 |
+|---|---|
+| Preset（build_p1/p2/p3_spec） | 范式级默认基础；不持有任何一份简历的具体坐标 |
+| Design Decision | 本份简历生成前的设计判断；只存在于生成前的 Agent 对话 / 任务上下文 |
+| DesignSpec | Design Decision + Preset 经装配与校验后的正式视觉事实源 |
+| Renderer（skeletons / layout_kit） | 只消费 DesignSpec，不负责做本份设计决策 |
+
+**兼容旧路径**：`build_document(blocks, skeleton_id, palette_id)`
+（先选骨架、再选色板）保留可用，定位为「无本份级定制需求的快速生成」；
+需要照片浮动等本份级设计时必须走 DesignSpec 路径。
+本份照片坐标 / offset / 尺寸等参数只进 Design Decision，
+禁止写入 Preset、全局配置或产品代码。
+
+> 仅当需要范式未覆盖的全新版式时，才编写一次性 python-docx 脚本
+> （系统临时目录、不入库；用户定稿确认后自动删除，未定稿期间保留迭代）。
 
 **OUTPUT 永不回流为 INPUT**（见 [AGENT.md §十二](../AGENT.md)）。
 
@@ -130,7 +164,7 @@ Word COM ComputeStatistics(2) 实测页数 = 1 → 用户目视确认
 |---|---|---|
 | 运维 CLI（gen.py / check_privacy） | 仅 Python 3.8+ 标准库 | 零依赖，任意机器可体检 |
 | DOCX 骨架构建（layout_kit / skeletons） | `python-docx` | 生成必需；doctor 检测并提示安装；未安装时模块仍可 import（色板/骨架元数据可用） |
-| 一次性版式脚本（仅特殊需求时） | `python-docx` | 同样生成必需；脚本用后即删 |
+| 一次性版式脚本（仅特殊需求时） | `python-docx` | 同样生成必需；脚本在用户定稿确认后自动删除 |
 | 页数实测 | Word/WPS + `pywin32` | 可选，Windows 本机最可靠 |
 | 无 Word 时估算 | `scripts/check_pages.py` | 通用近似估算 |
 
@@ -139,7 +173,7 @@ Word COM ComputeStatistics(2) 实测页数 = 1 → 用户目视确认
 - **可换人**：`ResumeBlocks` 与脚本均不含任何个人事实，数据全部运行时从简历库读取；换简历库即换人，不改产品。
 - **可追溯**：每次生成的 resume.md + generation_notes.md（含版式设计、取舍、实测页数）
   存在岗位目录；产品侧规范（AGENT §十四 / agent_entry §5）保证每次生成行为一致。
-- **不污染仓库**：积木与骨架是通用产品；任何含公司/岗位信息的一次性脚本放临时目录、用后即删。
+- **不污染仓库**：积木与骨架是通用产品；任何含公司/岗位信息的一次性脚本放临时目录，用户定稿确认后自动删除。
 - 版式是**个人产物**（随岗位变化），产品沉淀的是设计范式（双栏/横幅卡/单栏极简）、
   通用排版原语与行业色板，而不是 docx 文件。
 

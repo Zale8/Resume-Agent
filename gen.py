@@ -17,7 +17,7 @@ DOCX 成品怎么来？
 -----------------
 本产品**不内置固定模板库**。每份定向简历由 Agent 选定骨架（skeletons）与
 行业色板，把内容填入 layout_kit.ResumeBlocks 后动态构建 DOCX
-（用后即删任何临时脚本），详见 agent_entry.md 第 5 节「DOCX 动态生成规范」。
+（临时脚本在用户定稿确认后自动删除），详见 agent_entry.md 第 5 节「DOCX 动态生成规范」。
 """
 from __future__ import annotations
 
@@ -103,7 +103,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         expected = [
             "00_个人信息", "01_教育经历", "02_实习经历", "03_项目经历",
             "04_校园经历", "05_专业技能", "06_求职意向", "07_个人优势",
-            "08_证书奖项", "09_岗位定制简历", "10_简历母版", "11_岗位JD",
+            "08_证书奖项", "09_岗位定制简历", "11_岗位JD",
             "12_投递记录", "13_JD分析", "14_JD结构化分析", "99_配置",
         ]
         for name in expected:

@@ -14,6 +14,12 @@ Desktop.ini
 *.tmp
 *.bak
 
+# 岗位定制简历的临时生成脚本（未定稿保留迭代，定稿后删除，不入库）
+/scripts/gen_*.py
+
+# ===== Visual QA 临时工作区（Phase 3C，不入库）=====
+/temp/
+
 # ===== 个人简历数据（严禁入库）=====
 # 数据目录已物理隔离在仓库外（../简历库/），以下规则为双保险
 /data/
@@ -29,8 +35,10 @@ Desktop.ini
 *.gif
 *.bmp
 *.webp
-# 例外：文档所需示意图若未来需要入库，用 ! 取反
+# 例外：文档与测试所需图片
 !docs/**/*.png
+!tests/fixtures/**/*.jpg
+!tests/fixtures/**/*.png
 
 # 个人简历导出物（产品不内置任何 docx 模板，全部 docx 均视为个人产物）
 *.pdf

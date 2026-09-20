@@ -20,15 +20,35 @@ import re
 from typing import Optional
 
 
-def _parse_md_table(lines: list[str]) -> dict:
+def _parse_md_table(lines: list[str], skip_header: bool = False) -> dict:
     """解析 markdown 表格 | 字段 | 内容 | 为 {字段: 内容} 字典。
-    跳过表头分隔行（|---|---|）。"""
+    跳过表头分隔行（|---|---|）。
+    skip_header=True 时跳过表头行。表头按结构识别：即分隔行（|---|---|）
+    紧邻的上一行，而非「第一个非空行」——避免前置空行/分隔行/多表/表头名
+    恰为「字段」时把数据行误判为表头跳过（每个表的表头都会被精确识别）。"""
     result = {}
-    for line in lines:
+    header_indices: set[int] = set()
+    if skip_header:
+        for i, raw in enumerate(lines):
+            if not re.match(r"^\|[-: |]+\|$", raw.strip()):
+                continue
+            # 向上回溯找分隔行紧邻的表头行（跳过空行/其他分隔行）
+            j = i - 1
+            while j >= 0:
+                prev = lines[j].strip()
+                if not prev or re.match(r"^\|[-: |]+\|$", prev):
+                    j -= 1
+                    continue
+                if prev.startswith("|"):
+                    header_indices.add(j)
+                break
+    for i, line in enumerate(lines):
         line = line.strip()
         if not line.startswith("|"):
             continue
         if re.match(r"^\|[-: |]+\|$", line):
+            continue
+        if i in header_indices:
             continue
         cells = [c.strip() for c in line.strip("|").split("|")]
         if len(cells) >= 2:
@@ -40,10 +60,13 @@ def _parse_md_table(lines: list[str]) -> dict:
 
 
 def _read_md(path: Path) -> list[str]:
-    """读取 md 文件，返回行列表（跳过 > 开头的引用行）。"""
+    """读取 md 文件，返回行列表。解析失败返回空列表。"""
     if not path.exists():
         return []
-    text = path.read_text(encoding="utf-8")
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (UnicodeDecodeError, OSError):
+        return []
     return text.splitlines()
 
 
@@ -180,6 +203,7 @@ def load_personal_data(resume_lib_dir) -> dict:
         data["personal"]["phone"] = fields.get("手机号")
         data["personal"]["email"] = fields.get("邮箱")
         data["personal"]["wechat"] = fields.get("微信")
+        data["personal"]["gender"] = fields.get("性别")
         data["personal"]["location"] = fields.get("所在城市")
         data["personal"]["job_cities"] = fields.get("求职城市")
         data["personal"]["birth"] = fields.get("出生年月")
@@ -295,7 +319,7 @@ def load_personal_data(resume_lib_dir) -> dict:
             category = md_file.stem
             tools_section = _parse_section(lines, "工具")
             tools = _parse_bullet_list(tools_section)
-            proficiency = _parse_md_table(lines)
+            proficiency = _parse_md_table(lines, skip_header=True)
             data["skills"][category] = {
                 "tools": tools,
                 "proficiency": proficiency,
@@ -315,7 +339,7 @@ def load_personal_data(resume_lib_dir) -> dict:
             data["self_evaluation"]["summary"] = _parse_blockquote(intro_section)
             # 有事实支撑的优势（表格）
             adv_section = _parse_section(lines, "有事实支撑")
-            data["self_evaluation"]["advantages"] = _parse_md_table(adv_section)
+            data["self_evaluation"]["advantages"] = _parse_md_table(adv_section, skip_header=True)
             data["self_evaluation"]["source_file"] = md_file.name
 
     # ===== 08_证书奖项 =====

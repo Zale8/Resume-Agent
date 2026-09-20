@@ -2,6 +2,101 @@
 
 本项目的所有重要变更将记录在此文件中。
 
+## v0.8 (2026-09-19) — Design Decision 正式进入生产文档（Phase 2B-4 Step 7-B / 7-B-C）
+
+### Added
+
+- **Design Decision 正式定义**（agent_entry.md §5.1 / AGENT.md §十四.2）：
+  本份简历生成前的设计判断（范式、palette、照片决策、布局取舍），只存在于
+  生成前的 Agent 对话 / 任务上下文，不落独立决策文件
+- **Design Decision ≠ DesignSpec**：Decision 是生成前判断；DesignSpec 是经
+  `assemble_job_spec()` 装配并经 `validate_spec()` 校验后的正式结构化视觉事实源，
+  renderer 唯一认的设计输入
+- **Preset / Design Decision / DesignSpec 三层职责明确**：Preset 仅范式级默认
+  （build_p1/p2/p3_spec），不持有任何一份简历的具体照片坐标；本份参数
+  （offset / 尺寸等）只进 Design Decision，禁止写入 Preset / 全局配置 / 产品代码
+- **推荐生产链切换**：`Design Decision → Preset → assemble_job_spec →
+  validate_spec → build_document(design_spec=)`（AGENT.md §十四.1、
+  agent_entry.md §0/§3/§5.1、prompts/resume_writer.md「与 DOCX 动态生成的衔接」）
+
+### Changed
+
+- `style_preferences.md` 定位：风格输入 / 参考，经 Design Decision 转译后进入
+  DesignSpec；不是 renderer 直接配置，产品代码不解析
+- `generation_notes.md` 定位：生成后 Record（实际设计/参数/COM 页数/QA/人工调整
+  及原因），不是机器可读的决策输入
+- 临时脚本定位：执行器，不是设计系统（AGENT.md §十三.2 / agent_entry.md §5.1.1，
+  含 ✅/❌ 边界清单）；agent_entry.md §5.1 步骤重编号为 1-10
+- 兼容旧路径 `build_document(blocks, skeleton_id, palette_id)` 全部文档保留，
+  定位为「无本份级定制需求的快速生成」
+- Step 7-B-C 文档一致性补齐：prompts/system_prompt.md「DOCX 生成方式」与
+  docs/architecture.md §五数据流主链路同步为 DesignSpec 路径，旧路径标注为兼容
+
+### 禁止事项（本轮书面化）
+
+- 禁止创建第二套设计配置系统（design_decision.json / layout_decision.yaml /
+  job_design.md / photo_config.json 等）
+- 禁止把某一份简历的具体照片坐标 / offset / 尺寸写入 Preset、全局配置或产品代码
+
+### Unchanged
+
+- 本轮未修改任何 Python / tests / presets / renderer / Golden Sample；
+  全量 180/180 测试通过（基线 170 + Step 6 装配层新增 10）
+
+## v0.7 (2026-09-19) — Golden Sample 回归基准与照片浮动能力（Phase 2B-4 Step 2–4）
+
+### Added
+
+- **照片浮动定位能力**（Golden Sample CL-01 产品化，仅 minimal 范式消费）：
+  - `design/spec.py`：新增 `PhotoFloating`（enabled / position_h / position_v /
+    offset_x_cm / offset_y_cm）与 `PhotoBorder`（color / width_pt），
+    挂到 `PhotoSpec.floating` / `PhotoSpec.border`，默认 `None`
+  - `design/validator.py`：`invalid_photo_floating` / `invalid_photo_border`
+    两条硬规则（锚点白名单 column·page·margin / page·margin、偏移非负、
+    #RRGGBB、线宽非负、floating 不得脱离 photo 单独启用）
+  - `design/consumption.py`：7 个新字段全部登记 CONSUMED
+    （`layout_kit.insert_floating_photo` / `build_from_spec` / `build_minimal`）
+  - `layout_kit.py`：`insert_floating_photo()` 写 `wp:anchor`
+    （behindDoc=1 衬于文字下方、wrapTopAndBottom、layoutInCell=1、
+    posOffset cm→EMU、`a:ln` 描边），等比策略与 `insert_photo` 一致，
+    缺图安全跳过；锚点段固定行距（exact/atLeast）自动改回自动行高
+  - `skeletons.py`：`PhotoAnchorConfig` + `RenderOverrides.photo_anchor`，
+    spec→override 映射；坐标全部来自 Spec，代码不固化任何简历的具体偏移值
+  - 测试 +18（design 12 / renderer 6），全量 170 项通过；旧三骨架 DOCX
+    字节保值（37983 / 37933 / 37974）
+
+### Changed
+
+- **P3 minimal preset 板块分割线对齐 Golden Sample（Step 3）**：
+  `section.divider.weight` 0 → 2.25pt、`colors.hairline` None → `#007A37`
+  （pBdr 实现，不照搬 Golden 的手绘连接符）
+- **Golden Sample 登记为只读视觉回归基准（Step 2）**：
+  `agent_entry.md §5.1.2`、`AGENT.md §九`；封存 DOCX 仅作回归对照，
+  非数据源、非模板、禁止修改
+
+### 已知差异（Golden Sample 封存件 XML vs 本版产品输出）
+
+- 照片描边颜色：封存件实测 `a:ln` 填充为 `schemeClr=bg1`（白色），
+  golden_sample.md CL-01 证据栏记 `srgbClr=BFBFBF`；产品按规格条文实现 BFBFBF，
+  视觉一致性待人工目验裁决
+- 封存件照片锚点段为 `line=20 lineRule=exact`（手工压扁空段），
+  与 §三验收规则 4「照片段禁止 exact」冲突；产品遵循验收规则强制自动行高
+
+## v0.6 (2026-09-19) — 10_简历母版 退役（Phase 2B-3）
+
+### Removed
+
+- **`简历库/10_简历母版/`**（仓库外个人库目录）整体删除：3 份方向母版的
+  `编排规则.md`、通用版 `resume.md`/`*.docx` 与 README 证据矩阵。
+
+### Changed
+
+- 方向证据矩阵 / 三方向首位经历 / 取舍规则迁移至 `简历库/06_求职意向/求职意向.md` §7（7.1–7.3）
+- `gen.py doctor` expected 清单移除 `10_简历母版`；`AGENT.md §三`、`prompts/system_prompt.md`、
+  两份 README、`docs/architecture.md` 同步解除引用；`layout_kit.py` 骨架注释措辞更新
+- 个人优势写法公式并入 `AGENT.md §十四.2`；空间不足删减优先级已有条款（§十四.2-5），未重复迁移
+- 视觉来源唯一化为 DesignSpec → Skeleton → Renderer，方向不再预绑定版式骨架
+
 ## v0.4 (2026-09-13) — 沉淀通用排版积木与三种骨架
 
 > 起因：v0.3 删除模板库后，每份简历由 Agent 编写一次性脚本动态生成。

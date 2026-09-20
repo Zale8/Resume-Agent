@@ -13,7 +13,7 @@
 | `jd_analyst.md` | JD 结构化分析专家提示词：提取基础信息、工作职责、任职要求、必备技能、加分项、工具要求、关键词，构建 7 维岗位能力模型 | 已完成 |
 | `matcher.md` | 岗位匹配分析专家提示词：逐项匹配（Strong/Partial/Gap/Transferable）、维度汇总、策略建议（突出/弱化/删除/补充）、综合评分 | 已完成 |
 | `resume_writer.md` | 定向简历撰写专家提示词：6 阶段生成流程（读取分析 → 内容筛选 → 三层优化 → 结构组织 → 长度控制 → 产物输出），输出 resume.md + generation_notes.md | 已完成 |
-| `system_prompt.md` | 简历助手主系统提示词（后续从 AGENT.md 沉淀） | 待编写 |
+| `system_prompt.md` | 简历助手主系统提示词：核心身份、能力范围、对话路由、三层体系、红线、自检清单 | 已完成 |
 | `expression_optimizer.md` | 经历表达优化专家提示词：事实提取 → 分类判断 → Level 2 专业表达优化（STAR/PAR） → Level 3 岗位定制（按 JD 调整重点），输出可直接保存到简历库的三层结构 | 已完成 |
 
 ## 使用方式

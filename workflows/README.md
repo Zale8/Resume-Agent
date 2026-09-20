@@ -2,6 +2,7 @@
 
 > 本目录是 Resume Agent 的工作流方法论区，**可以进入 Git**。
 > 内容是「流程与规则」，不含任何用户个人数据。
+> **当前状态**：工作流逻辑集中在 AGENT.md 和 prompts/ 中，本目录暂为索引页。
 
 ## 核心工作流
 
@@ -16,7 +17,7 @@
 | 经历相关性分级（Highly Relevant → Irrelevant） | [AGENT.md §三](../AGENT.md) 第 13 条 |
 | 设计风格系统（自然语言 → 结构化参数） | [AGENT.md §十一](../AGENT.md) |
 | **DOCX 动态生成规范（内容 → DOCX）** | [AGENT.md §十四](../AGENT.md) + [agent_entry.md §5](../agent_entry.md) |
-| 临时脚本管理（用后即删） | [AGENT.md §十三](../AGENT.md) |
+| 临时脚本管理（定稿确认后自动删除） | [AGENT.md §十三](../AGENT.md) |
 | 完成后自检（12 项清单） | [AGENT.md §九](../AGENT.md) |
 
 > 面向 AI 的可执行入口是 [agent_entry.md](../agent_entry.md)（自包含，无需读其他文件即可开工）。

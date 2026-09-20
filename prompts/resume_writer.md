@@ -35,7 +35,7 @@
 | 用户简历库资产 | `简历库/00~08/` | 通过 data_loader 加载的真实经历 |
 | 用户偏好 | `简历库/99_配置/user_preferences.md` | 求职方向、表达风格、包装规则 |
 | 设计风格偏好 | `简历库/99_配置/style_preferences.md` | 九维设计偏好 + 动态排版规则 |
-| 版式方向 | 当次对话确认 | 骨架（双栏/横幅卡/单栏极简）+ 行业配色 + 照片形态 |
+| 版式方向（Design Decision） | 当次对话确认 + `99_配置/style_preferences.md` | 范式（双栏/横幅卡/单栏极简）+ 行业配色 + 照片决策（浮动/位置/边框）+ 本份布局取舍 |
 
 ## 生成流程（严格按序执行）
 
@@ -211,17 +211,27 @@
 
 ## 与 DOCX 动态生成的衔接
 
-resume.md 是**内容层**产物；v0.4 起没有模板渲染器，也没有需要每次重写的版式脚本。
-DOCX 由 Agent 复用产品仓库的通用排版积木**动态构建**
+resume.md 是**内容层**产物；产品没有模板渲染器，也没有需要每次重写的版式脚本。
+DOCX 由 Agent 按「Design Decision → DesignSpec → Renderer」正式链路**动态构建**
 （AGENT.md §十四 / agent_entry.md 第 5 节）：
 
 1. 把 resume.md 内容填入 `resume_generator.layout_kit.ResumeBlocks`，
    事实数据运行时从简历库 / resume.md 读取，不硬编码个人数据；
-2. 选定骨架（`two_column_sidebar` / `banner_card` / `single_column_minimal`）与行业色板，
-   调用 `skeletons.build_document(blocks, skeleton_id, palette_id)` 产出 DOCX；
-3. 页面、字体、配色、分栏、照片、板块由积木统一保证，Agent 按岗位重新组合配色与组件
-   （**禁止旧骨架换色冒充新设计**）；
-4. 照片取自 `00_个人信息/photos/`；
-5. 生成后用 Word COM 实测页数 = 1，再请用户目视确认；
-6. 仅当需要骨架未覆盖的全新版式时，才编写一次性 python-docx 脚本，
-   简历确认后立即删除，不入 Git。
+2. **确定本份 Design Decision**：结合 style\_preferences（风格输入 / 参考，不是
+   renderer 配置）、用户当次要求、照片信息（有无、原图比例）与单页预算，明确本份的
+   范式、配色与照片 / 布局决策；未明确的字段保持范式 Preset 默认，不编造数值；
+3. **装配并校验**：按范式加载 Preset（`build_p1/p2/p3_spec`），把 Design Decision 中
+   需要覆盖的字段经 `assemble_job_spec()` 装配成 DesignSpec，并经 `validate_spec()`
+   校验——**不校验不渲染**；
+4. **渲染**：调用 `build_document(blocks, design_spec=spec)` 产出 DOCX；页面、字体、
+   配色、分栏、照片、板块由 Preset + 积木统一保证（**禁止旧骨架换色冒充新设计**）。
+   兼容旧路径 `build_document(blocks, skeleton_id, palette_id)` 保留给无本份级
+   定制需求的快速生成；
+5. 照片取自 `00_个人信息/photos/`；照片浮动 / 边框等本份参数只进本份 Design
+   Decision，**不得写入 Preset、全局配置或产品代码**；
+6. 生成后用 Word COM 实测页数 = 1，再请用户目视确认；
+7. 仅当需要范式未覆盖的全新版式时，才编写一次性 python-docx 脚本
+   （临时脚本是**执行器，不是设计系统**），不入 Git；用户定稿确认后自动删除
+   （AGENT.md §十三）；
+8. 生成后在 generation\_notes.md 记录实际采用的设计与参数（**Record**）；
+   它是结果记录，不是下一次生成的决策输入。
