@@ -269,7 +269,7 @@ v0.3 渲染流水线移除后该测试同步删除。v0.4 通用性改由以下�
 
 > 数据隔离相关的历次事故见上文「六、历史教训（务必阅读）」，此处不重复。
 
-**v0.1 的渲染链路依赖 `C:\Users\13032\Desktop` + 扫描桌面目录名 + Word COM。**
+**v0.1 的渲染链路依赖 `C:\Users\<用户名>\Desktop` + 扫描桌面目录名 + Word COM。**
 后果：换电脑/换用户名即失效；macOS/Linux 完全无法运行；Word 无响应时脚本挂起（实测）。
 
 v0.2 处理：删除 `render_templates.py` / `gen_template_configs.py` / `reprocess_templates.py`，
