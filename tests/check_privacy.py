@@ -80,8 +80,8 @@ SKIP_PARTS = {".git", "__pycache__", "_git_backup"}
 OFFICE_SUFFIX = {".docx", ".pptx", ".xlsx"}
 
 # docProps / app 里的元数据字段：第三方 Office（WPS）会把「作者」「最后修改者」
-# 写成真实姓名，且常常把姓名拆到两个字段里（如 creator="某" /
-# lastModifiedBy="某"），因此**不能只靠词表整词匹配**，必须单独启发式检查。
+# 写成真实姓名，且常常把姓名拆到两个字段里（如 creator="姓" /
+# lastModifiedBy="名"），因此**不能只靠词表整词匹配**，必须单独启发式检查。
 _META_TAGS = (
     "dc:creator", "cp:lastModifiedBy", "dc:title", "dc:subject",
     "cp:keywords", "cp:category", "cp:description", "Company", "Manager",
