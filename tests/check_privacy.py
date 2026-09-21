@@ -29,10 +29,12 @@
 from __future__ import annotations
 
 import argparse
+import io
 import os
 import re
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 
 # Windows 控制台默认 GBK，输出 ✅/⚠️/❌ 会抛 UnicodeEncodeError 而中断审计。
@@ -61,12 +63,96 @@ EMAIL_ALLOWLIST = {
 }
 EMAIL_ALLOWLIST_PATTERNS = [
     re.compile(r"^[^@]+@example\.(com|org|net)$"),
+    # RFC 2606 / RFC 6761 保留 TLD：.invalid 与 .test 被标准明文保留给
+    # 测试用途，**不可能**是真实邮箱，因此与 example.* 同类放行。
+    # 注意：这只放行保留域名，绝不放行任何真实域名 —— 红线不变。
+    re.compile(r"^[^@]+@[^.@]+\.(invalid|test)$"),
     re.compile(r"^[^@]+@localhost$"),
     re.compile(r"^git@"),
 ]
 
 SKIP_SUFFIX = {".pyc", ".png", ".jpg", ".jpeg", ".gif", ".docx", ".pdf", ".zip"}
 SKIP_PARTS = {".git", "__pycache__", "_git_backup"}
+
+# Office 文档虽然整体是二进制（二进制 diff 在 `git log -p` 里只显示
+# "Binary files differ"），但内部是 zip + XML，**可以逐字扫描**。
+# 真实姓名最常泄漏的地方恰恰在这里：docx 的 docProps 元数据。
+OFFICE_SUFFIX = {".docx", ".pptx", ".xlsx"}
+
+# docProps / app 里的元数据字段：第三方 Office（WPS）会把「作者」「最后修改者」
+# 写成真实姓名，且常常把姓名拆到两个字段里（如 creator="某" /
+# lastModifiedBy="某"），因此**不能只靠词表整词匹配**，必须单独启发式检查。
+_META_TAGS = (
+    "dc:creator", "cp:lastModifiedBy", "dc:title", "dc:subject",
+    "cp:keywords", "cp:category", "cp:description", "Company", "Manager",
+)
+
+
+def _office_inner_text(blob: bytes) -> tuple[str, str]:
+    """解压 Office 文档，返回 (全部内部 XML 文本, 元数据字段文本)。
+
+    解压失败（不是合法 zip）时返回两个空串，绝不因此中断审计。
+    """
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(blob))
+    except (zipfile.BadZipFile, OSError, ValueError):
+        return "", ""
+    chunks: list[str] = []
+    meta: list[str] = []
+    for name in zf.namelist():
+        if not name.endswith((".xml", ".rels")):
+            continue
+        try:
+            raw = zf.read(name).decode("utf-8", "ignore")
+        except (OSError, ValueError, RuntimeError):
+            continue
+        chunks.append(raw)
+        if name.startswith("docProps/"):
+            for tag in _META_TAGS:
+                pat = re.compile(r"<%s[^>]*>(.*?)</%s>" % (tag, tag), re.S)
+                for m in pat.finditer(raw):
+                    value = re.sub(r"\s+", " ", m.group(1)).strip()
+                    if value:
+                        meta.append("%s=%s" % (tag, value))
+    raw_all = "\n".join(chunks)
+    plain = re.sub(r"<[^>]+>", " ", raw_all)
+    return raw_all + "\n" + plain, "\n".join(meta)
+
+
+# 只看「作者」类字段：标题/关键词/单位等字段装的是文档属性，模板站的
+# 品牌名（如「XX简历模板」）会高频出现，报了纯属噪声。
+_META_AUTHOR_TAGS = {"dc:creator", "cp:lastModifiedBy"}
+
+# 值里含这些通用词 -> 是文档/模板属性，不是人名
+_META_GENERIC_WORDS = ("模板", "简历", "文档", "表格", "演示", "范文", "示例",
+                       "Office", "Word", "Excel", "PowerPoint", "WPS")
+
+
+def suspicious_meta(meta: str) -> list[str]:
+    """从 Office 元数据里挑出「疑似真实姓名」的字段。
+
+    为什么不能只靠词表：Word/WPS 常把姓名**拆成两个字段**写
+    （如 creator 存一个字、lastModifiedBy 存另外两个字），整词匹配
+    「张三丰」必然落空。这条启发式专门补这个洞 —— 历史上真实发生过：
+    一份「从真实简历改造」的模板 docx 里，WPS 把姓名写进了作者字段。
+
+    为什么只查作者字段：`dc:title` / `cp:keywords` / `Company` 装的是文档
+    属性，模板站品牌名会大量命中，噪声足以淹没真问题。正文里的公司名仍由
+    词表匹配负责。
+    """
+    out = []
+    for seg in (s.strip() for s in meta.splitlines()):
+        if not seg or "=" not in seg:
+            continue
+        tag, value = seg.split("=", 1)
+        if tag not in _META_AUTHOR_TAGS:
+            continue
+        if not re.search(r"[\u4e00-\u9fff]", value):
+            continue
+        if any(w in value for w in _META_GENERIC_WORDS):
+            continue
+        out.append(seg)
+    return out
 
 
 class Finding:
@@ -91,16 +177,25 @@ def email_is_personal(addr: str) -> bool:
     return not any(p.match(addr) for p in EMAIL_ALLOWLIST_PATTERNS)
 
 
-def scan(text: str, where: str, terms: list[str], include_weak: bool) -> list[Finding]:
+def scan(text: str, where: str, terms: list[str], include_weak: bool,
+         generic: bool = True) -> list[Finding]:
+    """扫描一段文本。
+
+    ``generic=False`` 用于 Office 文档的内部 XML：那里充满 16 位数字
+    （样式 ID、时间戳、OLE 标识），会大量命中「银行卡」规则，噪声足以淹没
+    真问题。此时只做词表匹配；数字类强标识改由「只看作者字段」的元数据
+    启发式承担。
+    """
     out: list[Finding] = []
 
-    for kind, pat in GENERIC_STRONG.items():
-        for hit in set(pat.findall(text)):
-            if kind == "邮箱" and not email_is_personal(hit):
-                continue
-            if kind == "手机号" and hit in FAKE_VALUES:
-                continue
-            out.append(Finding(where, kind, hit, True))
+    if generic:
+        for kind, pat in GENERIC_STRONG.items():
+            for hit in set(pat.findall(text)):
+                if kind == "邮箱" and not email_is_personal(hit):
+                    continue
+                if kind == "手机号" and hit in FAKE_VALUES:
+                    continue
+                out.append(Finding(where, kind, hit, True))
 
     # 用户自定义敏感词（真实姓名/学校/公司等），从简历库配置读取
     for term in terms:
@@ -131,6 +226,20 @@ FAKE_VALUES = {
 }
 
 
+# 「强标识格式」直通表：这些值天然含数字或点号，若走下面的
+# 「纯数字不算敏感词」「含标点即拒」规则会被误杀。
+# 实测缺陷：词表里写的手机号与邮箱两行**从未真正生效** ——
+# 审计以为自己查了，其实那两行是死条目，于是「词表里有的东西」与
+# 「实际被校验的东西」长期不一致。此处单独直通。
+# 注意：本注释刻意不写任何真实值 —— 连「举例」也不写。
+_STRONG_ID_PATTERNS = (
+    re.compile(r"^1[3-9]\d{9}$"),                                     # 手机号
+    re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$"),  # 邮箱
+    re.compile(r"^\d{17}[\dXx]$"),                                    # 身份证
+    re.compile(r"^\d{16,19}$"),                                       # 银行卡
+)
+
+
 def _normalize_term(line: str) -> str | None:
     """把一行文本规范成可用的敏感词；不合格返回 None。
 
@@ -146,6 +255,9 @@ def _normalize_term(line: str) -> str | None:
     term = re.sub(r"^[>#*\-+\s]+", "", term).strip("`*_ \t")
     if not term:
         return None
+    # 强标识格式（手机号/邮箱/身份证/银行卡）直通，不适用下述启发式过滤
+    if any(p.match(term) for p in _STRONG_ID_PATTERNS):
+        return term
     # 过长 -> 是说明文字而非实体名
     if len(term) > 30:
         return None
@@ -198,9 +310,21 @@ def collect_findings(repo: Path, terms: list[str]) -> list[Finding]:
                  .splitlines() if f.strip()]
     for rel in tracked + untracked:
         path = repo / rel
-        if not path.is_file() or path.suffix.lower() in SKIP_SUFFIX:
+        suff = path.suffix.lower()
+        if not path.is_file() or (suff in SKIP_SUFFIX and suff not in OFFICE_SUFFIX):
             continue
         if any(part in SKIP_PARTS for part in path.parts):
+            continue
+        if suff in OFFICE_SUFFIX:
+            try:
+                text, meta = _office_inner_text(path.read_bytes())
+            except OSError:
+                continue
+            findings += scan(text, f"工作区:{rel}", terms, include_weak=False,
+                             generic=False)
+            for seg in suspicious_meta(meta):
+                findings.append(Finding(f"工作区:{rel}",
+                                        "Office元数据(疑似人名/公司)", seg, True))
             continue
         try:
             text = path.read_text(encoding="utf-8", errors="ignore")
@@ -228,6 +352,29 @@ def collect_findings(repo: Path, terms: list[str]) -> list[Finding]:
                     continue
                 findings += scan(line[1:], f"历史:{current_path}", terms,
                                  include_weak=False)
+
+    # ---- B2. 历史中的 Office 文件（docx/pptx/xlsx）内部文本 ----
+    # `git log -p` 对二进制文件只输出 "Binary files differ"，上面的 B 段
+    # **对 docx 完全失明**。而 WPS/Word 会把作者姓名写进 docProps，
+    # 这正是本项目历史上真实发生过的泄漏方式（一份「从真实简历改造」
+    # 的模板 docx 里带着真实姓名）。故单独取出 blob 解压扫描。
+    listing = git(repo, "rev-list", "--objects", "--all")
+    office_blobs: dict[str, list[str]] = {}
+    for line in listing.splitlines():
+        parts = line.split(" ", 1)
+        if len(parts) == 2 and parts[1].strip().lower().endswith(tuple(OFFICE_SUFFIX)):
+            office_blobs.setdefault(parts[1].strip(), []).append(parts[0])
+    for orel, shas in sorted(office_blobs.items()):
+        for sha in shas:
+            blob = subprocess.run(["git", "cat-file", "blob", sha], cwd=repo,
+                                  capture_output=True).stdout
+            text, meta = _office_inner_text(blob)
+            if text:
+                findings += scan(text, f"历史Office:{orel}", terms,
+                                 include_weak=False, generic=False)
+            for seg in suspicious_meta(meta):
+                findings.append(Finding(f"历史Office:{orel}",
+                                        "Office元数据(疑似人名/公司)", seg, True))
 
     # ---- C. 提交信息 ----
     log = git(repo, "log", "--all", "--format=%H%n%s%n%b")

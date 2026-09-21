@@ -2,15 +2,26 @@
 """估算 docx 内容总高度，判断是否单页 A4。
 
 这是**估算工具**，不能替代 Word COM 实测。
-页数以 Word ComputeStatistics(2) = 1 为准（见 layout_kit.count_pages_com）。
+页数以 Word ``ComputeStatistics(2)`` 为准（``gen.py build`` 会自动走 COM 实测并收敛）。
+
+v0.9.0 起本脚本**不再自带估算逻辑**，改为委托 ``fitting.estimate_height``：
+早先那份实现有三个已实测的硬缺陷
+（见 docs/architecture/audit_2026-09-21_root_cause.md §R4）：
+    1. 只遍历 ``wp:inline``，**浮动照片 ``wp:anchor`` 完全漏检**
+       —— 而本项目主用的正是浮动照片；
+    2. 单位换算写错（``int(cx)/12700`` 已是 pt，又乘 ``72/(2.54*20)*10`` ≈ ×14.17）；
+    3. 溢出时仍 ``return 0``，无法当门禁信号。
+现在估算逻辑只有一份（fitting.py），缺陷一次性修掉。
 
 用法：
     python scripts/check_pages.py <docx文件路径>
+    python scripts/check_pages.py <docx文件路径> --strict   # 溢出时返回 1
 
 本脚本不含任何用户个人信息。
 """
 from __future__ import annotations
 
+import argparse
 import sys
 from pathlib import Path
 
@@ -20,96 +31,47 @@ _SRC = _ROOT / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
-
-def _estimate_chars_per_line(font_size_pt: float, in_table: bool) -> int:
-    """根据字号估算每行字符数。中英文混排取折中值。"""
-    # A4 可用宽约 18cm，10pt 中文约 2.8mm/字 → ~64字/行
-    # 表格列宽更窄，约 60%
-    base = max(20, int(64 * 10 / font_size_pt))
-    return int(base * 0.6) if in_table else base
-
-
-def estimate_height(docx_path: str) -> tuple[float, float]:
-    """估算 DOCX 内容高度。返回 (估算高度cm, 可用高度cm)。"""
-    from docx import Document
-
-    doc = Document(docx_path)
-    sec = doc.sections[0]
-    usable_h_emu = sec.page_height - sec.top_margin - sec.bottom_margin
-    usable_cm = usable_h_emu / 914400 * 2.54
-
-    total_pt = 0.0
-    photo_pt = 0.0
-
-    def _para_height(p, in_table: bool = False) -> float:
-        pf = p.paragraph_format
-        size = 10.0
-        for run in p.runs:
-            if run.font.size:
-                size = run.font.size.pt
-                break
-        line = pf.line_spacing or 1.0
-        line_h = size * line if isinstance(line, float) else size
-        before = pf.space_before.pt if pf.space_before else 0
-        after = pf.space_after.pt if pf.space_after else 0
-        cpl = _estimate_chars_per_line(size, in_table)
-        text_len = len(p.text)
-        n_lines = max(1, (text_len + cpl - 1) // cpl) if text_len > 0 else 1
-        return line_h * n_lines + before + after
-
-    # 文档级段落
-    for p in doc.paragraphs:
-        total_pt += _para_height(p)
-
-    # 表格内段落
-    for table in doc.tables:
-        for row in table.rows:
-            for cell in row.cells:
-                for p in cell.paragraphs:
-                    total_pt += _para_height(p, in_table=True)
-
-    # 照片：从 inline shapes 检测实际高度，而非硬编码
+for _stream in (sys.stdout, sys.stderr):
     try:
-        from docx.oxml.ns import qn
-        for inline in doc.element.body.iter(qn("wp:inline")):
-            extent = inline.find(qn("wp:extent"))
-            if extent is not None:
-                cx = extent.get("cy")
-                if cx:
-                    photo_pt = max(photo_pt, int(cx) / 12700 / 2.54 * 72 / 20 * 10)
-    except Exception:
+        _stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore
+    except (AttributeError, ValueError, OSError):
         pass
 
-    # 兜底：如果检测不到照片但文档有图片关系，估算 2.5cm
-    if photo_pt == 0:
-        for rel in doc.part.rels.values():
-            if "image" in rel.reltype:
-                photo_pt = 71  # ~2.5cm
-                break
 
-    total_pt += photo_pt
-    total_cm = total_pt / 28.35
-    return total_cm, usable_cm
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="check_pages.py",
+        description="估算 DOCX 内容高度，判断是否单页 A4（估算，非实测）")
+    parser.add_argument("docx", help="DOCX 文件路径")
+    parser.add_argument("--strict", action="store_true",
+                        help="溢出时返回退出码 1（可作门禁用）")
+    args = parser.parse_args(argv)
 
-
-def main() -> int:
-    if len(sys.argv) < 2:
-        print("用法: python scripts/check_pages.py <docx文件路径>")
+    path = Path(args.docx)
+    if not path.is_file():
+        print(f"文件不存在: {path}")
         return 1
 
-    docx_path = sys.argv[1]
-    if not Path(docx_path).exists():
-        print(f"文件不存在: {docx_path}")
-        return 1
+    from resume_generator.fitting import estimate_height, measure_pages
 
-    total_cm, usable_cm = estimate_height(docx_path)
+    est = estimate_height(path)
+    print(est.render())
+    print(f"估算页数: {est.virtual_pages}（虚拟页，按可用高度折算）")
 
-    print(f"估算总高度: {total_cm:.1f} cm")
-    print(f"可用高度: {usable_cm:.1f} cm")
-    if total_cm <= usable_cm:
-        print(f"✓ 预计单页内 (余量 {usable_cm - total_cm:.1f} cm)")
-    else:
-        print(f"✗ 预计溢出 (超出 {total_cm - usable_cm:.1f} cm)")
+    pages, source = measure_pages(path)
+    tag = {"word_com": "实测", "estimate": "估算", "unavailable": "不可用"}
+    print(f"页数: {pages}（来源：{tag.get(source, source)}）")
+
+    if source == "word_com":
+        print("✅ 有 Word COM 实测，以该页数为准。")
+        if pages and pages > 1:
+            return 1 if args.strict else 0
+        return 0
+
+    if est.overflow_cm > 0:
+        print(f"✗ 预计溢出 ({est.overflow_cm:.2f} cm)")
+        return 1 if args.strict else 0
+    print(f"✓ 预计单页内 (余量 {est.usable_cm - est.total_cm:.2f} cm)")
     return 0
 
 

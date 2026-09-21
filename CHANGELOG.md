@@ -2,6 +2,192 @@
 
 本项目的所有重要变更将记录在此文件中。
 
+## v0.9.0 (2026-09-21) — 「一键达标生成」机制落地（解析器 + auto-fit + design.json）
+
+> 触发：用户要求「确保下次能一键生成一份达标的简历而不需要反复修改」。
+> 前置是一次根因审计（`docs/architecture/audit_2026-09-21_root_cause.md`）：
+> 「总套用上一份」「排版反复出问题」不是执行者的疏忽，而是当前结构的**必然输出**
+> ——规则齐全，但让规则成立的机制全部缺失。本次把三处结构性缺口一次补齐，
+> 使「一键达标」在结构上成为可能，而不再依赖某一次手工救火。
+
+### Added
+
+- **`src/resume_generator/content_parser.py` —— 内容层正式解析器（补审计 R5）**
+  - 把散落在每份一次性脚本里的 `_parse_resume_md` 提升为产品级模块（带单测）。
+  - 核心契约：**识别不到的内容一律进 `diagnostics`，绝不静默丢弃**。三档诊断
+    ——`ERROR`（致命，`strict=True` 时抛 `ResumeParseError`）、`WARNING`（识别到
+    但格式不符）、`INFO`（已识别但本份无布局槽位，如「待补充」）。
+  - 容忍性设计（对齐 `resume_writer.md` 的**示例**而非仅一种写法）：章节别名表
+    （`个人信息/基本资料/基本信息`、`个人优势/个人简介/自我评价/自我介绍`、
+    合并节「专业技能 / 证书奖项」、`待补充`）；条目标题四种写法
+    （`A - B（C）`、`A - B (C)`、`A | B | C`、`A | B`）；个人信息 `| 字段 | 值 |`
+    与 `**键**：值｜键：值` 两种内联写法。条目区内的非 bullet 行
+    **保留为 bullet 并告警**（不丢内容）。
+  - 验收基准：规范 `resume.md` **零诊断**。（照片缺失**不**计入诊断
+    ——照片属 Design Decision，不是内容层缺陷。）
+- **`src/resume_generator/fitting.py` —— auto-fit 引擎 + 八维 QA（补审计 R4）**
+  - `measure_pages()` 返回 `(pages, source)`，`source ∈ word_com / estimate /
+    unavailable`，**绝不伪造**页数；无 Word 时用修正后的估算器兜底。
+  - `QaReport` 覆盖审计点名的八个质量维度：页数 / 溢出 / 末行位置 / 寡行 /
+    内容密度 / 边距安全区 / 字号下限 / 照片变形。
+  - `fit()` 确定性收敛梯：**间距 → 行距 → 边距 → [字号]**，逐档递进、有上限
+    （`max_steps`）、按 `_tunables()` 数值签名判进展（到下限即停，不空转）。
+    字号档**默认关闭**（规范「绝不靠缩字号硬塞」）；用尽仍不达标 → 停下并给出
+    `attribution`（提示删内容），**不静默压字号**。
+  - `EMU_PER_CM = 360000` / `EMU_PER_PT = 12700`（修正历史 ×14.17 单位错误）；
+    浮动照片 `wp:anchor` **计入**高度估算（旧估算器只认 `wp:inline`）。
+  - 字号判定比对 **Spec 声明的最小字号**（含 `header_meta_sizes`）+ 半磅量化容忍
+    `FONT_QUANTIZATION_TOL_PT = 0.26`（`w:sz` 单位是半磅，8.52pt 落盘即 8.5pt）。
+- **`src/resume_generator/design/job_spec.py` —— design.json 承载「本份 Design Decision」（补审计 R3）**
+  - `load_design()` 严格结构校验：未知键（顶层 / 嵌套 / `divider`）**报错**、
+    必填键（`paradigm` / `design_intent`）校验、`_` 前缀注释键忽略。
+  - `_guard_intent()` **拒绝占位符**——模板原样提交（含 `【...】` / `待填` / `TODO`）
+    会被拒，防止「填模板」式敷衍。
+  - `design_to_spec()` 映射为已通过 `validate_spec` 的 DesignSpec：
+    `margins_cm` 同步 `safe_area` / `content_width`；照片**必须给出显式
+    `width_cm` / `height_cm`** 并派生 `aspect_ratio`（**禁变形**）；边框需
+    `color` 与 `width` 同给。
+  - **机制上关掉「套用上一份」**：`gen.py build` **每份都必须新建 design.json**，
+    缺文件直接拒绝，**无默认兜底**。
+- **`gen.py build` 子命令 —— 一条命令出达标 DOCX**
+  - 流程：`resume.md` → `parse_resume_md(strict=False)` → 打印诊断 → fatal 则退出 2
+    → `load_job_spec()` → `fit()`（逐步回显收敛过程）→ 打印八维 QA 报告
+    → 达标退出 0 / 未达标退出 1（除非 `--allow-overflow`）/ 错误退出 2。
+  - 参数：`resume_md`、`--design`（默认同目录 `design.json`）、`--out`、
+    `--allow-font-reduction`、`--allow-overflow`、`--write-design-template`、`--force`。
+  - 缺 `design.json` 时打印模板，并**明确提示不会套用上一份**。
+- **`scripts/check_pages.py` 重写**：删除自带的三处硬缺陷（只认 `wp:inline`、
+  单位换算 ×14.17、溢出恒返回 0），改为委托 `fitting.estimate_height` /
+  `measure_pages`；`--strict` 时溢出返回非 0，可作门禁。
+
+### Changed
+
+- **`src/resume_generator/design/__init__.py`**：补齐 `page_delta_from_margins`、
+  `color_delta_from_roles`、`DELTA_NODES` 与 `job_spec` 的公开导出
+  （此前 `fit()` 的边距档会 `ImportError`）。
+- **`agent_entry.md` §5.1**：Design Decision 的载体由「**对话内明确即可，不新建任何
+  决策文件**」改为「**每份落盘为 `design.json`，必须每份新建**」——旧表述是
+  「套用上一份」的制度性来源（会话结束即丢失，唯一留存物只剩上一份脚本）。
+- **`docs/architecture/audit_2026-09-21_root_cause.md`**：R3 / R4 / R5 对应项标记为
+  已缓解，并登记本次修复记录。
+
+### Fixed
+
+- **`tests/check_privacy.py` 三处审计盲区修复**（本次 git 全量隐私审计发现）：
+  1. **死条目**——词表里的手机号（纯数字）与邮箱（含点号）被 `_normalize_term`
+     判为无效词，**从未真正生效** → 新增「强标识格式」直通表；
+  2. **docx 失明**——`.docx` 被整体跳过，而真实姓名恰恰最爱藏在 Office 元数据里
+     → 新增 Office 解压扫描（正文走词表、作者字段走中日韩启发式）；
+  3. **历史不可见**——只扫工作区 → 新增历史 blob 文本 / 历史 Office 元数据 /
+     提交信息 / 提交作者身份四类扫描。
+  同时清理了 v0.9.0 文档编写时带入的 4 处公司名 / 地名，敏感词表补齐
+  （含英文别名，生效词 13 → 22）。
+
+### 兼容性
+
+- 旧路径 `build_document(blocks, skeleton_id, palette_id)` **保留可用，字节级稳定**。
+- 回归证据：冒烟产物字节保值 **37983 / 37933 / 37974**；全量单测
+  **317 项通过**（新增 `test_content_parser` 34 / `test_fitting` 26 /
+  `test_job_spec` 32）。
+- 真实取舍验证：一份「公司主题色 + 页面底色 + 浮动照片 + 紧边距」的**复合定制版**
+  经 `gen.py build` **首轮即达标、零后处理**——旧脚本的
+  `_tighten_section_spacing` / `_tighten_header_gap` 两处手工后处理不再需要。
+
+## v0.8.2 (2026-09-21) — 页面底色接入 Renderer（ColorSpec.page_background 从 schema 到消费）
+
+> 触发：岗位定制简历需要「页面底色」（用户反馈整份简历缺底色）。
+> `ColorSpec.page_background` 字段自 Phase 2B 起就存在于 schema（原注释：
+> PDF_1 主区 `#F4F4F4` / PDF_4 整页 `#EDF4F1`），但一直标注「Renderer 不消费」
+> —— 即设计知识已沉淀、执行层缺一半。本次补齐执行层。
+
+### Added
+
+- **`layout_kit.set_page_background(doc, hex_color)`**：写整页背景色
+  - `w:background`（OOXML 要求它是 `w:document` 的**首个子元素**，位于
+    `w:body` 之前，故用 `insert(0, ...)`）
+  - settings.xml 的 `w:displayBackgroundShape` —— 不开这个开关，Word/WPS
+    只把底色留在 XML 里，屏幕与打印都不显示
+  - 只写 `w:color`，不写 `themeColor`，避免底色随 Office 主题漂移；
+    非 `#RRGGBB` 直接 `ValueError`（不做静默兜底）
+- **`RenderOverrides.page_background`** + `_build_from_spec` 解析
+  `spec.colors.page_background`（仅当给出真实 `#RRGGBB` 字符串才接线；
+  `None` / `undetermined` → 不写，保持纯白）+ `build_minimal` 在 `setup_a4`
+  之后应用
+
+### 兼容性
+
+- 旧路径（无 spec）与 P1/P2 spec 的 `page_background` 均为 `None` → 不写背景，
+  三者视觉零变化；仅 `build_minimal` 读取该槽位
+- 回归证据：冒烟产物字节保值 **37983 / 37933 / 37974**；全量单测 **225 项通过**
+
+### 已知缺口（本次未产品化，暂由岗位级后处理承担）
+
+- `RenderSpacing.hairline_before`（独立分割线段的段前间距）、`summary_after`、
+  `edu_after` 在 `_SPACING_SPEC_SOURCES` 中**没有来源**，Spec 路径只能回退骨架
+  Profile 并登记 `spacing.*<schema_gap>`。结果是「板块标题 → 分隔线」的距离在
+  Spec 层无法表达（只能改骨架常量，会动旧路径）。
+  建议后续给 `SectionSpec` / `ExperienceSpec` 补 `divider_spacing_before` 等字段。
+
+## v0.8.1 (2026-09-21) — 修复「P3 启用照片」链路硬失败 + 文档示例不可运行
+
+> 触发：按 `agent_entry.md §5.1` 的官方示例给 P3（单栏极简）加照片，无法生成简历。
+> 排查结论是「文档示例错误」叠加「Renderer 未处理 Sourced 的 not_applicable 状态」
+> —— 两层都必须修，只修任一层仍跑不通。
+
+### Fixed
+
+- **`P3 + 启用照片` 时 Renderer 抛 `TypeError`（严重，无法生成）**：
+  `Sourced.not_applicable()` 的 `value` 是 `None`，但 `status` 为 CONFIRMED，
+  因此 `is_undetermined` 为 `False`。`skeletons._build_from_spec` 只判
+  `is_undetermined` 就 `float(sv.value)`，而 `build_p3_spec()` /
+  `build_p3_compact_spec()` 的 `photo.width` / `photo.height` 恰是
+  `not_applicable` → 一旦按文档把 P3 的照片打开（`enabled=True`），
+  Validator 通过之后渲染即崩溃：
+  `TypeError: float() argument must be a string or a real number, not 'NoneType'`
+  - 修复：新增 `_concrete_cm()` / `_concrete_box_cm()`，改为按
+    「有没有**真实数值**」判定（未确定 / not_applicable / 非数值 → `None`）；
+    拿不到数值 = 本份未指定 → **不覆盖，回退骨架的范式级默认照片盒**
+    （符合「未明确的字段保持 Preset 默认语义」：不崩溃，也不编造数值）
+  - 同一根因的潜在崩溃点一并加固：`spec.page.margins` 某项为
+    `not_applicable` 时，原先同样会 `float(None)`
+- **`agent_entry.md §5.1` 官方示例对 P3 100% 失败**：示例写
+  `replace(base.photo, floating=PhotoFloating(enabled=True))`，但 P3 Preset 的
+  `photo.enabled=False`（`photo_zone="none"`），Validator 判 ERROR
+  （`invalid_photo_floating`：「停用照片时不得单独启用浮动」），
+  `build_document()` 随即抛 `ValueError` 拒绝渲染
+  - 修复：示例补 `enabled=True`；补明「`photo_delta` 替换的是**整份 PhotoSpec**
+    而非只补差量，P3 必须显式开照片」；`§4 照片` 同步标注 P3 这一例外
+- **`scripts/` 下一份岗位定制临时脚本的三重问题**：
+  ① 写死简历库绝对路径 → 改为 `paths.resolve_lib()` 自动发现
+  （argv > `RESUME_LIB` > 逐级向上），换盘符 / 换用户名 / 换库位置都能跑；
+  ② 内容层 `resume.md` 缺失时抛裸 `FileNotFoundError` → 改为输出
+  可操作的四步排查指引；
+  ③ **硬编码真实姓名**（输出文件名里直接拼了个人姓名）——违反
+  「不得出现硬编码姓名」红线，也与该脚本「不硬编码个人事实」的 docstring 自相矛盾
+  → 改为运行时取 `blocks.name`，缺姓名按致命错误处理
+  - 该文件属临时脚本，已被 `.gitignore` 的 `/scripts/gen_*.py` 覆盖，不入库
+- **`tests/check_privacy.py` 白名单补 RFC 2606 保留域**：`.invalid` / `.test`
+  被标准明文保留给测试用途，与既有 `example.*` 同类放行，清掉
+  `tester@example.invalid` 这一误报（该值同时存在于提交历史，改文件消不掉）。
+  只放行保留域名，**不放行任何真实域名**，红线不变
+  - 修复前隐私审计为 ❌ 失败（3 处），即 `commit.py` 会拒绝提交；现 ✅ 通过
+
+### Added
+
+- `tests/test_renderer_photo_box_fallback.py`（5 项）：`_concrete_cm` 语义、
+  P3 未给尺寸→回退默认盒、给定尺寸→Spec 生效、floating→`wp:anchor`、
+  页边距 `not_applicable` 不崩溃
+- 全量测试 **220 → 225 项通过**；`gen.py doctor` 全绿；
+  旧三骨架 DOCX 字节保值（37983 / 37933 / 37974）
+
+### 说明（设计取舍）
+
+- `build_p3_spec()` 的 `photo.enabled=False` 是**有意的范式默认**
+  （`header.photo_zone="none"` → 单列 Header），本轮**未改动**；
+  本轮只修「按文档给 P3 加照片会导致硬失败」这条路径。
+  给 P3 配照片属**本份级参数**，走 Design Decision / `photo_delta`，
+  不进 Preset（与 v0.8 的既有禁令一致）。
+
 ## v0.8 (2026-09-19) — Design Decision 正式进入生产文档（Phase 2B-4 Step 7-B / 7-B-C）
 
 ### Added
@@ -96,6 +282,16 @@
   两份 README、`docs/architecture.md` 同步解除引用；`layout_kit.py` 骨架注释措辞更新
 - 个人优势写法公式并入 `AGENT.md §十四.2`；空间不足删减优先级已有条款（§十四.2-5），未重复迁移
 - 视觉来源唯一化为 DesignSpec → Skeleton → Renderer，方向不再预绑定版式骨架
+
+## v0.5 (2026-09-17) — 临时脚本生命周期规则调整 ⚠️ 无独立提交记录
+
+> **本条为事后回填**：本版本在 Git 历史中**没有对应提交**，原始记录已丢失。
+> 内容依据 `AGENT.md` §十三 的追溯说明补写，只记录可考证的部分。
+
+### Changed
+
+- 临时生成脚本的删除时机：v0.3「生成后立即删除」→ **v0.5「用户定稿确认后自动删除」**；
+  未定稿期间保留同一脚本用于排版迭代，不重写脚本（详见 `AGENT.md` §十三.3）。
 
 ## v0.4 (2026-09-13) — 沉淀通用排版积木与三种骨架
 

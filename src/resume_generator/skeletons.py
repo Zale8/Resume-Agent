@@ -29,6 +29,7 @@ from resume_generator.layout_kit import (
     insert_floating_photo,
     set_cell_margins,
     set_cell_width,
+    set_page_background,
     set_paragraph_spacing,
     set_run_font,
     set_table_fixed_layout,
@@ -120,6 +121,38 @@ class RenderOverrides:
     # （衬于文字下方 + 上下型环绕 + posOffset 定位 + a:ln 边框）；
     # None=保持 wp:inline 旧行为。banner/sidebar 不读。
     photo_anchor: Optional[PhotoAnchorConfig] = None
+    # 页面级背景色（spec.colors.page_background）。None=不消费，保持纯白
+    # （旧路径与 P1/P2 spec 均为 None，字节级不变）；仅 build_minimal 读。
+    page_background: Optional[str] = None
+
+
+def _concrete_cm(sv) -> Optional[float]:
+    """从 Sourced 取真实厘米数值；未确定 / not_applicable / 非数值 → None。
+
+    为什么不能只看 is_undetermined：`Sourced.not_applicable()` 的
+    status 是 CONFIRMED（is_undetermined=False）**但 value=None**
+    （例如 P3 Preset 的 photo.width / photo.height ——「P3 不使用照片」）。
+    旧实现只判 is_undetermined 就 `float(sv.value)`，于是「P3 Preset 上
+    启用照片」会直接 TypeError 崩溃。
+
+    语义：拿不到真实数值 = 本份未指定尺寸 → 返回 None，
+    由调用方沿用骨架的范式级默认照片盒（不猜、不编数值）。
+    """
+    if sv is None or sv.is_undetermined:
+        return None
+    v = sv.value
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    return float(v)
+
+
+def _concrete_box_cm(width_sv, height_sv) -> Optional[Tuple[float, float]]:
+    """宽高都能取到真实数值时才返回 (宽, 高)；否则 None（保持默认盒）。"""
+    w = _concrete_cm(width_sv)
+    h = _concrete_cm(height_sv)
+    if w is None or h is None:
+        return None
+    return (w, h)
 
 
 def _resolve_style(skeleton_id: str,
@@ -202,12 +235,19 @@ def _build_from_spec(blocks: ResumeBlocks, spec, *, strict: bool):
             f"范式 {spec.architecture.paradigm} 暂无已验证骨架映射，"
             f"当前仅支持：{list(PARADIGM_TO_SKELETON)}")
 
-    # --- 几何覆盖：仅当 Spec 的四个边距都已确定（P1）；P2 bleed 缺口 → 沿用默认 ---
+    # --- 几何覆盖：仅当 Spec 的四个边距都给出真实数值（P1）；
+    #     P2 bleed 缺口 / not_applicable（value=None）→ 沿用骨架默认 ---
     ov = RenderOverrides()
     m = spec.page.margins
     margin_vals = [m.top, m.bottom, m.left, m.right]
-    if all(v is not None and not v.is_undetermined for v in margin_vals):
-        ov.margins_cm = tuple(float(v.value) for v in margin_vals)  # type: ignore
+    resolved_margins = [_concrete_cm(v) for v in margin_vals]
+    if all(v is not None for v in resolved_margins):
+        ov.margins_cm = tuple(resolved_margins)  # type: ignore
+
+    # --- 列比例覆盖（v0.9.0）：grid.identity_band_ratio / grid.column_ratio ---
+    # 此前 grid 的列比例是死字段（改它不生效），身份区两列宽度硬编码在
+    # _LAYOUT_CONFIG。现在 Spec 给了合法比例就用它，给不出就沿用骨架默认。
+    ov.col_ratios = _ratios_from_spec(spec, sk)
 
     # --- 照片 / 顶部强调线覆盖 ---
     # P-2：spec.photo.enabled 决定 minimal Header 是否含照片格（P3 False → 单列）
@@ -216,13 +256,18 @@ def _build_from_spec(blocks: ResumeBlocks, spec, *, strict: bool):
     ov.accent_line_enabled = spec.header.accent_line.enabled
     if spec.photo.enabled:
         photo = spec.photo
+        # 只有 Spec 给出**真实数值**时才覆盖照片盒；给不出（未确定 /
+        # not_applicable，如 P3 Preset 的 photo.width=None）→ 不覆盖，
+        # 交回 _LAYOUT_CONFIG 的骨架默认照片盒。
+        # 「未明确的字段保持 Preset 默认语义」——不得 float(None) 崩溃，
+        # 也不得为填满字段编造数值。
         if photo.display_shape == "circle":
             fb = photo.fallback
-            if fb is not None and not fb.width.is_undetermined \
-                    and not fb.height.is_undetermined:
-                ov.photo_box_cm = (float(fb.width.value), float(fb.height.value))
-        elif not photo.width.is_undetermined and not photo.height.is_undetermined:
-            ov.photo_box_cm = (float(photo.width.value), float(photo.height.value))
+            box = _concrete_box_cm(fb.width, fb.height) if fb is not None else None
+        else:
+            box = _concrete_box_cm(photo.width, photo.height)
+        if box is not None:
+            ov.photo_box_cm = box
 
         # CL-01：浮动照片（wp:anchor）。仅 floating.enabled=True 时接线，
         # 其余 Spec/Preset 保持 wp:inline；偏移缺省按 0 处理，坐标不写死。
@@ -250,6 +295,14 @@ def _build_from_spec(blocks: ResumeBlocks, spec, *, strict: bool):
                 border_color=border_color,
                 border_width_pt=border_width)
 
+    # --- 页面级背景色（Phase 3C）：spec.colors.page_background ---
+    # 只有 Spec 给出真实 #RRGGBB 字符串时才写 w:background；
+    # None / undetermined（缺知识依据）→ 不写，保持纯白纸面。
+    pb = getattr(spec.colors, "page_background", None)
+    if pb is not None and not pb.is_undetermined \
+            and isinstance(pb.value, str) and pb.value:
+        ov.page_background = pb.value
+
     # 色板：Spec 颜色角色经 resolve_style_for_spec 进入 RenderPalette；
     # palette 仅作为颜色缺口的 fallback 基础（取骨架默认行业色板）。
     palette = resolve_palette(None, sk)
@@ -271,10 +324,55 @@ def _resolve_layout(skeleton_id: str, overrides: Optional[RenderOverrides]):
     margins = overrides.margins_cm if overrides and overrides.margins_cm \
         else cfg["margins_cm"]
     usable = usable_width_cm(margins[2], margins[3])
-    col_widths = split_columns_cm(usable, cfg["col_ratios"])
+    ratios = (overrides.col_ratios
+              if overrides and overrides.col_ratios else cfg["col_ratios"])
+    col_widths = split_columns_cm(usable, ratios)
     photo_box = overrides.photo_box_cm if overrides and overrides.photo_box_cm \
         else cfg["photo_box_cm"]
     return margins, usable, col_widths, photo_box
+
+
+def _valid_ratio(candidate, expected_len: int) -> Optional[Tuple[float, ...]]:
+    """校验 Spec 给的列比例是否可用：长度匹配、元素为正、和≈1。
+
+    不合法一律返回 None（沿用骨架默认），**不报错也不猜** —— 合法性属于
+    Validator 的职责（RULE_COLUMN_RATIO），这里只判断「能不能用」。
+    """
+    if candidate is None:
+        return None
+    try:
+        vals = tuple(float(v) for v in candidate)
+    except (TypeError, ValueError):
+        return None
+    if len(vals) != expected_len or any(v <= 0 for v in vals):
+        return None
+    if abs(sum(vals) - 1.0) > 0.02:
+        return None
+    return vals
+
+
+def _ratios_from_spec(spec, skeleton_id: str) -> Optional[Tuple[float, ...]]:
+    """从 DesignSpec 解析本份的列比例；给不出真实值时返回 None。
+
+    优先级（按语义对应，不做几何猜测）：
+      1. ``grid.identity_band_ratio`` —— 身份区表格列比例，三骨架通用。
+      2. 仅 sidebar：``grid.column_ratio`` —— 正文双栏栅格的正式声明；
+         单栏范式（[1.0]）对 2 列骨架无意义，长度不匹配自然被拒。
+    """
+    expected_len = len(_LAYOUT_CONFIG[skeleton_id]["col_ratios"])
+    grid = getattr(spec, "grid", None)
+    if grid is None:
+        return None
+
+    band = _valid_ratio(getattr(grid, "identity_band_ratio", None), expected_len)
+    if band is not None:
+        return band
+
+    if skeleton_id == SKELETON_SIDEBAR:
+        col = _valid_ratio(getattr(grid, "column_ratio", None), expected_len)
+        if col is not None:
+            return col
+    return None
 
 
 def build_banner_card(blocks: ResumeBlocks, palette: Palette,
@@ -383,6 +481,10 @@ def build_minimal(blocks: ResumeBlocks, palette: Palette,
     doc = Document()
     setup_a4(doc, margins_cm=margins)
     _set_doc_default_font(doc, st)
+    # 页面底色：仅当 Spec 给出 page_background 时写 w:background
+    # （旧路径 / P3 Preset 默认 None → 零变化，纯白纸面）。
+    if overrides is not None and overrides.page_background:
+        set_page_background(doc, overrides.page_background)
 
     head = doc.add_table(rows=1, cols=2 if has_photo else 1)
     clear_table_borders(head)
@@ -423,6 +525,20 @@ def build_minimal(blocks: ResumeBlocks, palette: Palette,
         _apply_align(rp, st.components.photo_align)
         anchor = overrides.photo_anchor if overrides is not None else None
         if anchor is not None:
+            # v0.9.0 产品级修复（2026-09-21）：锚点段此前**完全没有**被
+            # set_paragraph_spacing 触碰，于是继承 docDefaults 的
+            # ``w:after=200``（10pt）与 ``w:line=276``（1.15 倍）。
+            # 浮动照片用「上下型环绕 + layoutInCell=1」锚在单元格里，
+            # Word 必须为它预留纵向空间 → 该表格行被撑到图片高度，
+            # 而这段继承来的段后/行距就在图片高度之外又白占约 0.82cm，
+            # 把头部表撑高，形成「个人信息 → 个人优势」之间的莫名空缺。
+            # 定稿样本上标题被推到 5.02cm，压紧后 4.05cm。
+            # 只改这一条分支：旧路径（无 anchor，含 wp:inline）字节级不变。
+            set_paragraph_spacing(
+                rp,
+                before=sp.id_photo_before or 0,
+                after=sp.id_photo_after or 0,
+                line=1.0)
             # Golden Sample CL-01：浮动锚定照片（wp:anchor），不占内联流；
             # insert_floating_photo 内部强制锚点段自动行距，防 exact 裁图。
             insert_floating_photo(
@@ -656,9 +772,28 @@ def _pt(n):
     return Pt(n)
 
 
-def _bottom_border(paragraph, color: str, sz):
+def _space_str(v):
+    """pBdr 的 w:space 取值格式化。
+
+    OOXML ``ST_PointMeasure`` 是十进制 pt；Word 自身写整数。None 原样返回
+    （由 _bottom_border 落到历史值 "1"）；整数值去掉小数点（0.0 → "0"），
+    非整数保留有效位（0.5 → "0.5"）。
+    """
+    if v is None:
+        return None
+    f = float(v)
+    if abs(f - round(f)) < 1e-9:
+        return str(int(round(f)))
+    return f"{f:g}"
+
+
+def _bottom_border(paragraph, color: str, sz, *, border_space=None):
     """段落底边框。sz 为 OOXML 边框厚度（1/8 pt），必须由调用方从
-    RenderSpacing 显式传入，本执行层不提供视觉默认值。"""
+    RenderSpacing 显式传入，本执行层不提供视觉默认值。
+
+    border_space（v0.9.0）：``w:pBdr/w:bottom/@w:space``（pt）。None 时写
+    历史值 "1"，旧路径与 P1/P2 字节级不变。
+    """
     from docx.oxml import OxmlElement
     from docx.oxml.ns import qn
 
@@ -667,7 +802,8 @@ def _bottom_border(paragraph, color: str, sz):
     bottom = OxmlElement("w:bottom")
     bottom.set(qn("w:val"), "single")
     bottom.set(qn("w:sz"), str(sz))
-    bottom.set(qn("w:space"), "1")
+    bottom.set(qn("w:space"),
+               str(border_space) if border_space is not None else "1")
     bottom.set(qn("w:color"), color.lstrip("#"))
     pBdr.append(bottom)
     pPr.append(pBdr)
@@ -691,13 +827,20 @@ def _divider_enabled(style: RenderStyle) -> bool:
 
 
 def _emit_section_divider(doc, style: RenderStyle):
-    """仅在 divider 启用时创建独立 hairline 段（含其专属段前/段后）。"""
+    """仅在 divider 启用时创建独立 hairline 段（含其专属段前/段后）。
+
+    v0.9.0：divider 空段的固定行高（spec.section.divider.line_height）与
+    pBdr 的 w:space（spec.section.divider.border_space）正式接通；两者
+    None 时保持历史行为（自动行高 / space=1），旧路径字节不变。
+    """
     if not _divider_enabled(style):
         return
     sp = style.spacing
     add_hairline(doc, style.palette.hairline,
                  before_pt=sp.hairline_before, after_pt=sp.hairline_after,
-                 sz=sp.hairline_sz)
+                 sz=sp.hairline_sz,
+                 line_pt=sp.hairline_height,
+                 border_space=_space_str(sp.hairline_border_space))
 
 
 def _section_title(doc, text, style: RenderStyle, numbered=False):
@@ -916,4 +1059,6 @@ def _main_title(cell, text, style: RenderStyle):
     # P-5：divider.weight<=0 / hairline 无色时不附边框（P2=0.5pt、旧路径=6
     # 均 >0，行为字节级不变）
     if _divider_enabled(style):
-        _bottom_border(p, style.palette.hairline, sz=style.spacing.hairline_sz)
+        _bottom_border(p, style.palette.hairline, sz=style.spacing.hairline_sz,
+                       border_space=_space_str(
+                           style.spacing.hairline_border_space))

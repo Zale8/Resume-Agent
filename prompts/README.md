@@ -23,7 +23,7 @@
 1. 用户提供 JD → 加载 `jd_analyst.md` → 输出结构化分析
 2. 用户要求匹配分析 → 加载 `matcher.md` + JD 分析结果 + 简历库数据 → 输出匹配报告
 3. 用户要求优化某段经历 → 加载 `expression_optimizer.md` + 用户原始描述 + （可选）JD 分析 → 输出三层结构化经历
-4. 用户要求生成简历 → 加载 `resume_writer.md` + JD 分析 + 匹配报告 + 简历库数据 + 用户偏好 + 模板信息 → 输出 resume.md + generation_notes.md
+4. 用户要求生成简历 → 加载 `resume_writer.md` + JD 分析 + 匹配报告 + 简历库数据 → 输出 resume.md + generation_notes.md；**后续的排版由设计流程单独确定本份 Design Decision**（产品**没有模板库**，不存在"模板信息"这类输入）
 
 提示词之间不互相依赖，通过共享的简历库数据串联流程。
 

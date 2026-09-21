@@ -14,7 +14,7 @@
 | `generate-resume` | `prompts/resume_writer.md` + AGENT.md §六/§十四 | 以 Prompt 形式运行 |
 | `style-tune` | AGENT.md §十一 + `简历库/99_配置/` | 以对话形式运行 |
 
-## MVP v0.4 状态
+## 当前版本（v0.8.2）状态
 
 技能逻辑以 Prompt + 工作流规范形式维护在 [prompts/](../prompts/)、[workflows/](../workflows/README.md) 与 [AGENT.md](../AGENT.md)，本目录暂无实现文件。待流程稳定后封装为独立 Skill 文件。
 

@@ -83,13 +83,22 @@ class TestConsumptionMatrixIntegrity(unittest.TestCase):
                                 msg=f"{item.path} fallback 必须有说明 notes")
 
     def test_03_paradigm_specific_rows_are_discoverable(self):
-        # column_ratio 在三个范式下均零读取（unconsumed）；仅 P2 数值漂移
-        # 触发 WARNING，P1/P3 结构巧合等价不触发（由评估器区分，非状态区分）
-        for paradigm in (P1, P2, P3):
+        # v0.9.0 变更：grid.column_ratio 在 P2 下**已被真实消费**
+        # （_ratios_from_spec → _resolve_layout 切列宽）；P1/P3 仍为零读取，
+        # 因为它们的正文本来就是单栏，该字段描述的是正文栅格而非身份区列比。
+        row_p2 = get_consumption("grid.column_ratio", P2)
+        self.assertIsNotNone(row_p2)
+        self.assertEqual(row_p2.status, STATUS_CONSUMED)
+        self.assertTrue(row_p2.consumed_by)
+        for paradigm in (P1, P3):
             row = get_consumption("grid.column_ratio", paradigm)
             self.assertIsNotNone(row)
             self.assertEqual(row.status, STATUS_UNCONSUMED)
             self.assertEqual(row.consumed_by, ())
+        # 身份区列比（v0.9.0 新增字段）三范式通用消费
+        band = get_consumption("grid.identity_band_ratio")
+        self.assertIsNotNone(band)
+        self.assertEqual(band.status, STATUS_CONSUMED)
         # 范式专属行优先：tags.enabled P3 为 unconsumed，P1 为 consumed
         self.assertEqual(get_consumption("experience.tags.enabled", P3).status,
                          STATUS_UNCONSUMED)
@@ -145,8 +154,8 @@ class TestUnconsumedWarningPresets(unittest.TestCase):
 
     def test_11_p2_warnings(self):
         paths, result = _unconsumed_paths(build_p2_spec())
+        # v0.9.0：grid.column_ratio 已真实消费，从预警集合移除
         expected = {
-            "grid.column_ratio",
             "grid.gutter",
             "colors.paper",
             "photo.display_shape",
@@ -234,13 +243,43 @@ class TestUnconsumedWarningNegativeControls(unittest.TestCase):
         paths, _ = _unconsumed_paths(spec)
         self.assertIn("photo.display_shape", paths)
 
-    def test_26_p2_column_ratio_is_caught_but_p1_p3_not(self):
-        self.assertIn("grid.column_ratio",
-                      _unconsumed_paths(build_p2_spec())[0])
+    def test_26_p2_column_ratio_is_no_longer_a_dead_field(self):
+        """v0.9.0 回归：P2 的列比不再「声明了却零读取」。
+
+        历史行为：Spec 声明 [0.32, 0.68]，Renderer 用骨架常量
+        ≈[0.304, 0.696]，差异静默 —— 这正是审计报告里
+        「改了它不生效，还不报错」的典型。本测试锁住修复后的两个事实：
+        ① 评估器不再对 P2 报 grid.column_ratio 未消费；
+        ② 列宽确实按 Spec 值切分（0.32 → 6.208cm@19.4 版心）。
+        """
+        self.assertNotIn("grid.column_ratio",
+                         _unconsumed_paths(build_p2_spec())[0])
         self.assertNotIn("grid.column_ratio",
                          _unconsumed_paths(build_p1_spec())[0])
         self.assertNotIn("grid.column_ratio",
                          _unconsumed_paths(build_p3_spec())[0])
+
+        # ② 端到端：P2 spec 的列比真的进了 tblGrid
+        from docx.oxml.ns import qn
+
+        from resume_generator.layout_kit import BulletBlock, ResumeBlocks
+        from resume_generator.skeletons import build_document
+
+        blocks = ResumeBlocks(
+            name="张三", intent="测试岗位",
+            contact_lines=["138-0000-0000", "zhangsan@example.com"],
+            internships=[BulletBlock(title="某某有限公司", role="实习生",
+                                     meta="2025.06 - 2025.09",
+                                     bullets=["虚构条目。"])],
+        )
+        doc = build_document(blocks, design_spec=build_p2_spec())
+        grid = doc.tables[0]._tbl.find(qn("w:tblGrid"))
+        cols = [int(c.get(qn("w:w"))) for c in grid.findall(qn("w:gridCol"))]
+        total = sum(cols)
+        self.assertEqual(len(cols), 2)
+        # 19.4cm 版心按 0.32/0.68 切 → 约 6.208 / 13.192 cm
+        self.assertAlmostEqual(cols[0] / total, 0.32, places=3,
+                               msg=f"P2 列比未按 Spec 落地：{cols}")
 
 
 if __name__ == "__main__":

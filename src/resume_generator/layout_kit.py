@@ -226,14 +226,35 @@ def add_text(paragraph, text, size_pt, **kwargs):
 
 
 def add_hairline(doc, color="#E0E0E0", *, before_pt=0.0, after_pt=3.0,
-                 sz="6"):
+                 sz="6", line_pt=None, border_space=None):
     """段落下发丝线（底边框）。
 
     before_pt / after_pt / sz 为 Phase 3B-3 起可注入的间距/厚度参数，
     默认值保持工具层历史原值；颜色仍由 Phase 3B-2 Palette 决定。
+
+    v0.9.0 新增两个可选几何参数（此前只能靠事后改 XML）：
+
+    line_pt
+        该**空段落**的固定行高（pt）。None = 自动行高（历史行为 ≈12pt）。
+        定稿样本上「标题 → 分割线」距离的大头就是这个空段的行高：
+        auto 段比 2pt 固定段高约 0.35cm，一份 6 板块的简历差 2cm。
+        本段无文字无图片，使用 exact 行高不会裁切任何内容
+        （含图片的段落仍禁止 exact —— Golden Sample 验收规则 4）。
+    border_space
+        ``w:pBdr/w:bottom/@w:space``（pt），边框与文字底线的距离。
+        None = 历史值 1pt。
     """
     p = doc.add_paragraph()
-    set_paragraph_spacing(p, before=before_pt, after=after_pt, line=1.0)
+    if line_pt is None:
+        set_paragraph_spacing(p, before=before_pt, after=after_pt, line=1.0)
+    else:
+        set_paragraph_spacing(p, before=before_pt, after=after_pt, line=1.0)
+        pf = p.paragraph_format
+        from docx.enum.text import WD_LINE_SPACING
+        from docx.shared import Pt
+
+        pf.line_spacing_rule = WD_LINE_SPACING.EXACTLY
+        pf.line_spacing = Pt(float(line_pt))
     pPr = p._p.get_or_add_pPr()
     from docx.oxml import OxmlElement
     from docx.oxml.ns import qn
@@ -242,11 +263,45 @@ def add_hairline(doc, color="#E0E0E0", *, before_pt=0.0, after_pt=3.0,
     bottom = OxmlElement("w:bottom")
     bottom.set(qn("w:val"), "single")
     bottom.set(qn("w:sz"), str(sz))
-    bottom.set(qn("w:space"), "1")
+    bottom.set(qn("w:space"),
+               str(border_space) if border_space is not None else "1")
     bottom.set(qn("w:color"), color.lstrip("#"))
     pBdr.append(bottom)
     pPr.append(pBdr)
     return p
+
+
+def set_page_background(doc, hex_color: str):
+    """整页背景色（OOXML w:background + settings 的 displayBackgroundShape）。
+
+    产品化来源：Golden Sample 产物化清单里的「页面级背景色」（PDF_1 主区
+    #F4F4F4 / PDF_4 整页 #EDF4F1）。DesignSpec 侧由
+    ``ColorSpec.page_background`` 表达（值为 None = 不消费，保持纯白）。
+
+    实现要点：
+    - ``w:background`` 必须是 ``w:document`` 的**首个子元素**（在 ``w:body``
+      之前），故用 insert(0, ...) 而非 append；
+    - 只有 settings.xml 里开了 ``w:displayBackgroundShape``，Word/WPS 才会
+      真正把底色画出来（否则仅存在于 XML、打印与屏幕都不显示）；
+    - 只写颜色，不写主题色引用（themeColor），避免随 Office 主题漂移。
+    """
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+
+    color = hex_color.lstrip("#")
+    if len(color) != 6:
+        raise ValueError(f"页面底色必须是 #RRGGBB，收到：{hex_color!r}")
+
+    document = doc.element
+    bg = document.find(qn("w:background"))
+    if bg is None:
+        bg = OxmlElement("w:background")
+        document.insert(0, bg)
+    bg.set(qn("w:color"), color)
+
+    settings = doc.settings.element
+    if settings.find(qn("w:displayBackgroundShape")) is None:
+        settings.append(OxmlElement("w:displayBackgroundShape"))
 
 
 def shade_cell(cell, hex_color: str):

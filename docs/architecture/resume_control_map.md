@@ -62,7 +62,8 @@ DesignSpec (design/spec.py)
 
 关键链路事实：
 
-- **Spec 路径**先经 `validate_spec` 校验，再由 `_build_from_spec` 将范式映射到现有骨架（`PARADIGM_TO_SKELETON` 仅覆盖 `p1_banner_single`/`p2_sidebar_two_column`，P3 minimal 无对应范式 → 旧路径消费）。
+- **Spec 路径**先经 `validate_spec` 校验，再由 `_build_from_spec` 将范式映射到现有骨架（`PARADIGM_TO_SKELETON` 覆盖**全部三个**范式：`p1_banner_single` → `banner_card`、`p2_sidebar_two_column` → `two_column_sidebar`、`p3_minimal_editorial` → `single_column_minimal`；见 `skeletons.py:75-79`）。三范式**都**有 Spec 路径，不存在"P3 只能走旧路径"。
+- **⚠️ Spec 字段 ≠ 可调设计维度**：`design/consumption.py` 的消费矩阵是唯一权威。当前 165 条登记中 `unconsumed` 占 **49.7%**（78 个字段路径零读取点，如 `grid.column_ratio`、`header.type`、`header.photo_zone`、`section.icon.*`、`section.title_color_role`、`achievement.*`、`typography.weights.body`）。**给这些字段赋值不会产生任何视觉变化**，`evaluate_unconsumed()` 也只给非阻断 WARNING。**做 Design Decision 前先查矩阵**，否则会把设计自由消耗在无效字段上，最终退化为"反正改了也没用，不如沿用上次那套值"。
 - **几何覆盖**仅在 Spec 的四个边距都已确定时才覆盖 `_LAYOUT_CONFIG` 的 margins；照片在 `display_shape="circle"` 时按 `photo.fallback.width/height` 覆盖 photo_box，否则按 `photo.width/height`。
 - **RenderStyle 是 Renderer 唯一可读的排版参数包**；`skeletons.py` 内禁止字号/字体/行距字面量（`MIN_BODY_PT` 是工程兜底常量，非视觉决策）。
 - **Schema Gap / undetermined 字段**一律回退 `SKELETON_DEFAULT_STYLE[skeleton_id]` 并登记到 `RenderStyle.spec_fallbacks` 元组，供后续审计。
@@ -451,7 +452,7 @@ python tests/check_privacy.py
 | 模板比例（margins / col_ratios / photo_box_cm） | Skeleton          | `skeletons.py` `_LAYOUT_CONFIG`                         | Spec 路径覆盖 margins（仅 P1 四值全确定时）与 photo_box_cm（circle 走 fallback）；col_ratios 永远 Profile |
 | DOCX 底层行为（setup_a4 / set_table_fixed_layout / shade_cell / set_cell_margins / add_hairline / add_right_tab_stop / insert_photo） | Layout            | `layout_kit.py`                                          | 原语层，所有视觉参数由调用方注入；`add_hairline` 默认值保持工具层历史原值，视觉决策归 `RenderSpacing`        |
 | 照片能力            | Photo / Layout Kit | `layout_kit.insert_photo` + `skeletons._build_from_spec` | 真圆形裁切属 Capability Gap；等比保护与 contain fallback 已实现；`distortion_allowed` Validator 强制 False    |
-| JD 内容 / 经历层    | **不在本地图**     | `data_loader.py` + `data/` 资产库                      | Renderer 不读个人事实，`ResumeBlocks` 由调用方填入                                              |
-| 模板选择            | **不在本地图**     | `agent_entry.md` + `gen.py`（已删除）                  | Phase 3A 后由 Agent 动态选择骨架，不再走固定模板路径                                            |
+| JD 内容 / 经历层    | **不在本地图**     | `data_loader.py` + 仓库外 `../简历库/`                  | Renderer 不读个人事实，`ResumeBlocks` 由调用方填入；仓库内 `data/` 只是 `.gitignore` 的防误建空规则，**不是资产库** |
+| 模板选择            | **不在本地图**     | `agent_entry.md` + `gen.py`（运维 CLI，**存在且在用**）   | 产品**没有模板库**；范式与骨架由 Agent 在每份 Design Decision 中重新选定，不走固定模板路径      |
 | 字号下限硬约束      | Validator         | `design/validator.py` RULE_BODY_FONT_SIZE               | `ConstraintsSpec.minimum_body_font_size_pt=9.0` + `layout_kit.MIN_BODY_PT=9.0` 工程兜底        |
 | 单页页数            | Layout            | `layout_kit.count_pages_com`（COM 不可用返回 None）     | 最终以 Word/WPS `ComputeStatistics(2)` 实测为准；本阶段无自动化测试，需人工 XML 检查            |

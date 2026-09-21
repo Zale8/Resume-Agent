@@ -159,18 +159,30 @@ _CONSUMPTION_MATRIX: Tuple[FieldConsumption, ...] = (
                      notes="主栏板块归属硬编码于各 builder（内容组织策略）"),
 
     # --- grid -------------------------------------------------------------
+    # v0.9.0 状态变更：P2 的 grid.column_ratio 由「零读取 + 数值漂移（预警）」
+    # 变为**真实消费** —— _ratios_from_spec 读它并交给 _resolve_layout 切列宽。
+    # P1/P3 仍为零读取，但原因变了：这两族的正文本来就是单栏，
+    # 「正文栅格」声明（[1.0]）与身份区那两列无关，身份区列比走
+    # grid.identity_band_ratio。
     FieldConsumption("grid.column_ratio", STATUS_UNCONSUMED, (),
                      paradigm=P1,
-                     notes="零读取点（列宽取 _LAYOUT_CONFIG 骨架常量）；"
-                           "Header 双区 + body 单栏与声明结构巧合等价，不预警"),
-    FieldConsumption("grid.column_ratio", STATUS_UNCONSUMED, (),
+                     notes="正文单栏范式的栅格声明，无读取点；身份区列比走"
+                           "grid.identity_band_ratio，两者不混用"),
+    FieldConsumption("grid.column_ratio", STATUS_CONSUMED,
+                     (F_BUILD_FROM_SPEC, F_LAYOUT),
                      paradigm=P2,
-                     notes="Spec [0.32,0.68] 零读取；实际列比为骨架常量 "
-                           "≈[0.304,0.696]，数值漂移（预警）"),
+                     notes="v0.9.0 起真实消费：_ratios_from_spec 取该值切列宽，"
+                           "不再回退骨架常量（历史数值漂移 0.32/0.68 vs "
+                           "0.304/0.696 已消除）"),
     FieldConsumption("grid.column_ratio", STATUS_UNCONSUMED, (),
                      paradigm=P3,
-                     notes="零读取点；无照片 Header 单列由 photo.enabled "
-                           "分支按 usable_width 落地，非列比驱动，不预警"),
+                     notes="正文单栏范式的栅格声明，无读取点；Header 单/双列"
+                           "由 photo.enabled 分支决定，非列比驱动"),
+    FieldConsumption("grid.identity_band_ratio", STATUS_CONSUMED,
+                     (F_BUILD_FROM_SPEC, F_LAYOUT),
+                     notes="v0.9.0 新增：身份区（Header）表格的列比例。此前该"
+                           "几何硬编码在 skeletons._LAYOUT_CONFIG，Spec 改不动；"
+                           "长度/和/正数校验不过则沿用骨架默认"),
     FieldConsumption("grid.gutter", STATUS_UNCONSUMED,
                      notes="split_columns_cm 无中缝概念，无读取点"),
     FieldConsumption("grid.width_rule", STATUS_UNCONSUMED,
@@ -291,8 +303,11 @@ _CONSUMPTION_MATRIX: Tuple[FieldConsumption, ...] = (
     FieldConsumption("colors.additional_accents", STATUS_CONSUMED,
                      (F_VALIDATOR,),
                      notes="Validator 单一强调色 ERROR 闸门"),
-    FieldConsumption("colors.page_background", STATUS_UNCONSUMED,
-                     notes="无 w:background/底色渲染消费点"),
+    FieldConsumption("colors.page_background", STATUS_CONSUMED,
+                     (F_BUILD_FROM_SPEC, F_MINIMAL),
+                     notes="v0.8.2 起接通：layout_kit.set_page_background 写 "
+                           "w:background（必须是 document 首个子元素）+ settings "
+                           "的 displayBackgroundShape；仅 minimal 消费"),
     FieldConsumption("colors.light_sidebar_secondary", STATUS_UNCONSUMED,
                      notes="侧栏第二色无消费点（build_sidebar 仅用 light_sidebar）"),
 
@@ -413,6 +428,27 @@ _CONSUMPTION_MATRIX: Tuple[FieldConsumption, ...] = (
                            "sidebar 标题段 after 不在 _SPACING_ROLES_BY_SKELETON"
                            "（标题边框直接附在标题段，无独立 title_after 槽），"
                            "P2 Spec 值在该骨架不生效（保留旧行为）"),
+    # v0.9.0 新增：四个此前只能靠「每份简历的临时脚本后处理」的间距字段，
+    # 现已接通 Spec → RenderSpacing → Renderer 全链路。
+    FieldConsumption("section.divider_spacing_before", STATUS_CONSUMED,
+                     (F_RESOLVE_SPACING,),
+                     notes="v0.9.0 新增：映射 hairline_before（独立 divider 空段"
+                           "的段前）。此前是 schema_gap，恒回退骨架 Profile"),
+    FieldConsumption("section.summary_spacing_after", STATUS_CONSUMED,
+                     (F_RESOLVE_SPACING,),
+                     notes="v0.9.0 新增：映射 summary_after（个人优势/简介段后）"),
+    FieldConsumption("section.education_spacing_after", STATUS_CONSUMED,
+                     (F_RESOLVE_SPACING,),
+                     notes="v0.9.0 新增：映射 edu_after（教育经历各行段后）"),
+    FieldConsumption("section.divider.line_height", STATUS_CONSUMED,
+                     (F_RESOLVE_SPACING, F_LAYOUT),
+                     notes="v0.9.0 新增：映射 hairline_height，写 divider 空段的"
+                           "exact 行高（该段无文字无图片，不触发图片裁剪禁令）。"
+                           "None 保持自动行高（历史行为）"),
+    FieldConsumption("section.divider.border_space", STATUS_CONSUMED,
+                     (F_RESOLVE_SPACING, F_LAYOUT),
+                     notes="v0.9.0 新增：映射 hairline_border_space，写 "
+                           "w:pBdr/w:bottom/@w:space。None 保持历史值 1pt"),
     FieldConsumption("section.styles_per_document", STATUS_UNCONSUMED,
                      notes="数量约束描述；等价约束在 ConstraintsSpec 表达"),
 
@@ -596,10 +632,9 @@ def evaluate_unconsumed(spec: DesignSpec) -> List[UnconsumedFinding]:
         out.append(UnconsumedFinding(path, actual, message))
 
     # --- grid -------------------------------------------------------------
-    if p == P2:
-        add("grid.column_ratio", list(spec.grid.column_ratio),
-            "列比已显式声明，但 Renderer 实际使用骨架常量列比"
-            "（≈0.304/0.696），Spec 列比零读取")
+    # v0.9.0：P2 的 grid.column_ratio 已真实消费（见矩阵），不再出现在这里。
+    # P1/P3 的 column_ratio 是「正文单栏栅格」声明，与身份区两列无关，
+    # 不构成「声明了却没落地」的缺口，故也不预警。
     if _positive_number(spec.grid.gutter):
         add("grid.gutter", f"{spec.grid.gutter.value}cm",
             "栏间中缝已显式声明，但 Renderer 无中缝概念，该值零读取")
@@ -622,9 +657,8 @@ def evaluate_unconsumed(spec: DesignSpec) -> List[UnconsumedFinding]:
     if _definite(spec.colors.paper):
         add("colors.paper", spec.colors.paper.value,
             "纸张色已显式声明，但无底色渲染落点（依赖 DOCX 默认白底）")
-    if _definite(spec.colors.page_background):
-        add("colors.page_background", spec.colors.page_background.value,
-            "页面背景色已显式声明，但 Renderer 不写 w:background/页面底色")
+    # v0.9.0：colors.page_background 已真实消费（w:background +
+    # displayBackgroundShape），不再出现在这里。
     if _definite(spec.colors.light_sidebar_secondary):
         add("colors.light_sidebar_secondary",
             spec.colors.light_sidebar_secondary.value,

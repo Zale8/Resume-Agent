@@ -178,12 +178,30 @@ class TextStyle:
 
 @dataclass
 class Divider:
-    """板块标题下发丝线。"""
+    """板块标题下发丝线。
+
+    v0.9.0（2026-09-21）补齐两个属于 divider 自身几何的缺口 ——
+    此前它们只能靠每份简历的临时脚本后处理（见
+    docs/architecture/audit_2026-09-21_root_cause.md §3）：
+
+    ``line_height``
+        承载 divider 的那个**空段落**的行高（pt）。None = 沿用骨架
+        默认（自动行高，≈12pt）。定稿样本上是「标题→分割线距离」的
+        最大来源：一个 auto 空段比 2pt 固定行高高出约 0.35cm，
+        每份 6 个板块就是 2cm 级的差距。
+        注意：这里允许 exact 行高，因为该段**没有任何文字与图片**；
+        含图片的段落仍禁止 exact（Golden Sample 验收规则 4）。
+    ``border_space``
+        OOXML ``w:pBdr/w:bottom/@w:space``（pt），即边框与文字底线之间
+        的距离。None = 沿用历史值 1pt。
+    """
     style: str = "hairline"
     weight: Sourced = field(default_factory=lambda: Sourced.kv1(0.5, "pt"))
     color_role: str = ROLE_HAIRLINE
     width_rule: str = "column_content_width"  # 单栏=正文宽；双栏=所在栏宽
     bleed: Sourced = field(default_factory=lambda: Sourced.kv1(0.0, "cm"))
+    line_height: Optional[Sourced] = None
+    border_space: Optional[Sourced] = None
 
 
 @dataclass
@@ -296,6 +314,15 @@ class GridSpec:
     gutter: Sourced                     # 双栏中缝
     width_rule: str                     # 表宽单一来源公式
     column_widths_cm: Sourced           # 派生列宽；依赖未定边距时 undetermined
+    # 身份区（Header）表格的列比例，如 [8.4, 10.4]（信息格 : 照片格）。
+    # None → Renderer 沿用骨架默认（banner 8.4:10.4 / minimal 13:5）。
+    # 为什么放在 grid 而不在 header：身份区的列几何与正文栅格同源
+    # （都受「usable_width 按比例切分」这一条规则支配），放一起才不会
+    # 出现两套互相矛盾的列宽口径。
+    # v0.9.0 前这里是个死字段：column_ratio 只声明了正文栅格（单栏范式
+    # 恒为 [1.0]），而身份区那两列的宽度被硬编码在 skeletons._LAYOUT_CONFIG，
+    # Spec 完全改不动 —— 这就是「自主编排」在结构层被卡住的地方。
+    identity_band_ratio: Optional[List[float]] = None
 
 
 @dataclass
@@ -390,6 +417,22 @@ class PhotoSpec:
 
 @dataclass
 class SectionSpec:
+    """板块标题与分割线的设计参数。
+
+    v0.9.0（2026-09-21）补三个缺口字段。它们都是「每份简历都要改、
+    但 Spec 说不出口」的间距，此前只能靠一次性脚本后处理
+    （见 docs/architecture/audit_2026-09-21_root_cause.md §3）：
+
+    ``divider_spacing_before``
+        独立 divider 空段的段前距（pt）。与 ``title_spacing_after``
+        （标题文字 → divider）是两个不同的角色：一个是段落自身的
+        space-before，一个是上一段的 space-after，两者会叠加。
+    ``summary_spacing_after`` / ``education_spacing_after``
+        非经历板块（个人优势 / 教育经历）正文段的段后距。经历条目
+        节奏由 ExperienceSpec 管，这两类是纯粹的单行板块，各自有
+        独立的呼吸节奏，故各给一个字段而不是塞进一个「通用段后距」。
+        None = 沿用骨架默认（minimal 6pt / 4pt）。
+    """
     title_style: str
     prefix: Sourced
     icon: IconSpec
@@ -404,6 +447,9 @@ class SectionSpec:
         default_factory=lambda: Sourced.kv1(1, "pt"))
     styles_per_document: Sourced = field(
         default_factory=lambda: Sourced.kv1(1, "count"))
+    divider_spacing_before: Optional[Sourced] = None
+    summary_spacing_after: Optional[Sourced] = None
+    education_spacing_after: Optional[Sourced] = None
 
 
 @dataclass

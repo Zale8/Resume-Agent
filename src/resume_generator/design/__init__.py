@@ -65,7 +65,20 @@ from .consumption import (
     STATUS_UNCONSUMED,
 )
 from .presets import build_p1_spec, build_p2_spec, build_p3_spec
-from .assembly import assemble_job_spec
+from .assembly import (
+    assemble_job_spec,
+    page_delta_from_margins,
+    color_delta_from_roles,
+    DELTA_NODES,
+)
+from .job_spec import (
+    JobSpecError,
+    DESIGN_TEMPLATE,
+    PARADIGM_ALIASES,
+    load_design,
+    design_to_spec,
+    load_job_spec,
+)
 
 __all__ = [
     "DesignSpec", "Sourced",
@@ -87,5 +100,8 @@ __all__ = [
     "STATUS_CONSUMED", "STATUS_PARTIALLY_CONSUMED",
     "STATUS_FALLBACK", "STATUS_UNCONSUMED",
     "build_p1_spec", "build_p2_spec", "build_p3_spec",
-    "assemble_job_spec",
+    "assemble_job_spec", "page_delta_from_margins", "color_delta_from_roles",
+    "DELTA_NODES",
+    "JobSpecError", "DESIGN_TEMPLATE", "PARADIGM_ALIASES",
+    "load_design", "design_to_spec", "load_job_spec",
 ]

@@ -218,6 +218,10 @@ class RenderSpacing:
     entry_after: float
     bullet_before: float
     bullet_after: float            # spec.experience.bullet_spacing_after
+    # v0.9.0：divider 空段的固定行高（pt，None=自动）与 pBdr 的 w:space（pt）。
+    # 这两个槽位此前是 schema_gap，每份简历都得靠一次性脚本后处理。
+    hairline_height: Optional[float] = None
+    hairline_border_space: Optional[float] = None
     tags_before: Optional[float] = None
     tags_after: Optional[float] = None
     # --- 普通板块尾距 ---
@@ -262,14 +266,23 @@ class RenderSpacing:
 # 故以 SectionSpec.spacing_before 为权威来源。
 # Phase 2B-5 Step 1：title_after / entry_after 正式从 Spec 取值，取代旧路径
 # 「永久 Profile」回退（P1/P2/P3 默认值已与各骨架 Profile 保值）。
+# v0.9.0（2026-09-21）：hairline_before / hairline_height /
+# hairline_border_space / summary_after / edu_after 五个 schema_gap 槽位
+# 正式接到 Spec（SectionSpec / Divider 新增字段）。此前它们只能取骨架
+# Profile，导致「每份简历都要写一段后处理脚本才能调分割线与普通板块节奏」。
 _SPACING_SPEC_SOURCES = {
     "section_before": lambda s: s.section.spacing_before,
     "title_after": lambda s: s.section.title_spacing_after,
+    "hairline_before": lambda s: s.section.divider_spacing_before,
     "hairline_after": lambda s: s.section.divider_to_first_line,
     "hairline_sz": lambda s: s.section.divider.weight,
+    "hairline_height": lambda s: s.section.divider.line_height,
+    "hairline_border_space": lambda s: s.section.divider.border_space,
     "entry_before": lambda s: s.experience.entry_spacing,
     "entry_after": lambda s: s.experience.entry_spacing_after,
     "bullet_after": lambda s: s.experience.bullet_spacing_after,
+    "summary_after": lambda s: s.section.summary_spacing_after,
+    "edu_after": lambda s: s.section.education_spacing_after,
     "bar_sz": lambda s: (s.header.accent_line.height
                          if s.header.accent_line is not None
                          and s.header.accent_line.enabled else None),
@@ -282,7 +295,7 @@ _SPACING_EIGHTH_PT = {"hairline_sz", "bar_sz"}
 _SPACING_ROLES_BY_SKELETON = {
     SKELETON_BANNER: (
         "section_before", "title_after", "hairline_before", "hairline_after",
-        "hairline_sz",
+        "hairline_sz", "hairline_height", "hairline_border_space",
         "entry_before", "entry_after", "bullet_before", "bullet_after",
         "tags_before", "tags_after",
         "summary_before", "summary_after", "edu_before", "edu_after",
@@ -295,7 +308,7 @@ _SPACING_ROLES_BY_SKELETON = {
     ),
     SKELETON_MINIMAL: (
         "section_before", "title_after", "hairline_before", "hairline_after",
-        "hairline_sz",
+        "hairline_sz", "hairline_height", "hairline_border_space",
         "entry_before", "entry_after", "bullet_before", "bullet_after",
         "summary_before", "summary_after", "edu_before", "edu_after",
         "certs_before", "certs_after",
@@ -305,8 +318,10 @@ _SPACING_ROLES_BY_SKELETON = {
     ),
     SKELETON_SIDEBAR: (
         # sidebar 标题边框直接附在标题段（无独立 divider 段）：
-        # 标题段 after 即 divider→首行，title_after/hairline_before 不消费。
+        # 标题段 after 即 divider→首行，title_after/hairline_before 不消费；
+        # 同理没有独立空段，hairline_height 不消费（行高即标题行高）。
         "section_before", "hairline_after", "hairline_sz",
+        "hairline_border_space",
         "entry_before", "entry_after", "bullet_before", "bullet_after",
         "summary_before", "summary_after", "edu_before", "edu_after",
         "id_name_before", "id_name_after", "id_intent_before",

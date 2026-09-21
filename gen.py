@@ -1,23 +1,39 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""gen.py — Resume-Agent 统一命令行入口（运维 / 校验工具）。
+"""gen.py — Resume-Agent 统一命令行入口。
 
 设计目标
 --------
-1. 零依赖：本 CLI 只用 Python 3.8+ 标准库，clone 下来即可运行。
+1. 零依赖：doctor / check-library 只用 Python 3.8+ 标准库，clone 下来即可运行。
 2. 零配置：简历库路径自动发现（见 paths.py），不写死任何绝对路径。
-3. 跨平台：Windows / macOS / Linux 行为一致，不依赖 Word、WPS、COM。
+3. 跨平台：Windows / macOS / Linux 行为一致；`build` 在有 Word 的机器上
+   用 COM 实测页数，没有则退化为明确标注的估算。
 
-两条子命令
+三条子命令
 ----------
-    python gen.py doctor           体检：环境 / 路径 / 简历库 / 生成依赖
-    python gen.py check-library    校验简历库四阶段产物一致性
+    python gen.py doctor                         体检：环境 / 路径 / 简历库 / 生成依赖
+    python gen.py check-library                  校验简历库四阶段产物一致性
+    python gen.py build <resume.md> [--design …] 一条命令从内容层 + 本份设计出达标 DOCX
+
+`build` 为什么要求 design.json 必须每份新建
+-------------------------------------------
+审计（docs/architecture/audit_2026-09-21_root_cause.md §R3）指出：旧规则把
+设计决策的落盘载体堵死（「对话内明确即可，不新建任何决策文件」），流程上唯一
+留存的实物反而是**上一份的临时脚本**，于是「照抄上一份」成了必然。
+`build` 改为读取**该岗位目录下的 design.json**，并且：
+
+* 缺文件 → 直接拒绝并打印模板（**没有默认设计，不存在兜底**）；
+* 写出成品的同时把本份设计意图回显，便于事后核对；
+* 生成后自动走 auto-fit 收敛 + 八维 QA 报告，不达标就明确归因。
 
 DOCX 成品怎么来？
 -----------------
-本产品**不内置固定模板库**。每份定向简历由 Agent 选定骨架（skeletons）与
-行业色板，把内容填入 layout_kit.ResumeBlocks 后动态构建 DOCX
-（临时脚本在用户定稿确认后自动删除），详见 agent_entry.md 第 5 节「DOCX 动态生成规范」。
+推荐路径就是 `build`：内容层 resume.md →（本份 design.json）→ DesignSpec
+→ validate_spec → 渲染 → auto-fit → QA 报告。
+需要完全自定义版式时，才写一次性脚本（临时脚本是**执行器，不是设计系统**），
+不入 Git；用户定稿确认后删除（AGENT.md §十三）。
+兼容旧路径 `build_document(blocks, skeleton_id, palette_id)`（无本份级定制时使用）。
+详见 agent_entry.md 第 5 节「DOCX 动态生成规范」。
 """
 from __future__ import annotations
 
@@ -139,7 +155,8 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     head("体检结论")
     if problems == 0:
         print("  🎉 全部通过。生成简历请按 agent_entry.md 第 5 节："
-              "选定骨架 + layout_kit 动态构建 DOCX。")
+              "确定本份 Design Decision → assemble_job_spec → validate_spec "
+              "→ build_document(design_spec=) 动态构建 DOCX。")
         return 0
     print(f"  发现 {problems} 处问题，请按上面的提示修复。")
     return 1
@@ -299,7 +316,7 @@ def _has_deliverable(resume_dir: Path, key: str) -> bool:
     if direct.is_dir() and any(direct.rglob("*.docx")):
         return True
 
-    # 公司名可能带后缀（JD 写「某公司华北某市分公司」，目录名是「某公司」）
+    # 公司名可能带后缀（JD 写「某公司某地分公司」，目录名是「某公司」）
     for cand in resume_dir.iterdir():
         if not cand.is_dir():
             continue
@@ -310,13 +327,153 @@ def _has_deliverable(resume_dir: Path, key: str) -> bool:
 
 
 # ============================================================================
+# build — 一条命令：内容层 + 本份设计 → 达标 DOCX
+# ============================================================================
+
+def _design_template_text() -> str:
+    import json as _json
+
+    from resume_generator.design import DESIGN_TEMPLATE
+
+    return _json.dumps(DESIGN_TEMPLATE, ensure_ascii=False, indent=2)
+
+
+def _build_help_on_missing_design(design_path: Path, resume_md: Path) -> None:
+    bad(f"缺少本份设计决策文件：{design_path}")
+    print()
+    print("  `build` 不会替你挑一套设计，也不会沿用上一份 —— 这是刻意的：")
+    print("  审计已证明「照抄上一份」的根源就是设计决策没有落盘载体。")
+    print()
+    print(f"  请先在本命令旁生成模板，再按本份取舍填写：")
+    print(f"      python gen.py build \"{resume_md}\" --write-design-template")
+    print(f"      （会写出 {design_path}）")
+    print()
+    print("  模板内容：")
+    for line in _design_template_text().splitlines():
+        print("      " + line)
+
+
+def cmd_build(args: argparse.Namespace) -> int:
+    head("Resume-Agent 一键生成（content → design → fit → QA）")
+
+    resume_md = Path(args.resume_md)
+    if resume_md.is_dir():
+        resume_md = resume_md / "resume.md"
+    if not resume_md.is_file():
+        bad(f"找不到内容层 resume.md：{resume_md}")
+        print("  内容层必须先生成（agent_entry.md §2 / §6）：")
+        print("      11_岗位JD → 14_JD结构化分析 → 13_JD分析 → "
+              "09_岗位定制简历/公司/岗位/日期/resume.md")
+        print("  四阶段产物状态可用 `python gen.py check-library` 查看。")
+        return 2
+
+    design_path = (Path(args.design) if args.design
+                   else resume_md.parent / "design.json")
+
+    if args.write_design_template:
+        if design_path.exists() and not args.force:
+            warn(f"{design_path} 已存在；要覆盖请加 --force")
+            return 1
+        design_path.parent.mkdir(parents=True, exist_ok=True)
+        design_path.write_text(_design_template_text() + "\n", encoding="utf-8")
+        ok(f"已写出设计决策模板：{design_path}")
+        print("  请按本份取舍填写（paradigm 与 design_intent 必填），"
+              "再运行 build。")
+        return 0
+
+    # --- 1. 内容层 ---
+    from resume_generator.content_parser import parse_resume_md
+
+    try:
+        lib = resolve_lib(args.lib)
+        photo_root = lib
+    except ResumeLibNotFound as exc:
+        warn(f"未能定位简历库，照片相对路径将原样保留\n{exc}")
+        photo_root = None
+
+    try:
+        parsed = parse_resume_md(resume_md, photo_root=photo_root, strict=False)
+    except Exception as exc:                      # noqa: BLE001 - CLI 边界
+        bad(f"内容层解析失败：{exc}")
+        return 1
+
+    head("1. 内容层诊断")
+    print(f"  {parsed.summary_line()}")
+    for line in parsed.diagnostics.render().splitlines():
+        print("  " + line)
+    if parsed.fatal:
+        bad("内容层存在致命问题，拒绝生成（先修内容层，再 build）")
+        return 2
+    if parsed.diagnostics.warnings:
+        warn(f"内容层有 {len(parsed.diagnostics.warnings)} 条警告"
+             f"（不阻断生成，但请核对上面逐条列出的原始行）")
+
+    # --- 2. 本份设计决策 ---
+    head("2. 本份设计决策（design.json）")
+    if not design_path.is_file():
+        _build_help_on_missing_design(design_path, resume_md)
+        return 2
+
+    from resume_generator.design import JobSpecError, load_job_spec
+
+    try:
+        spec, design = load_job_spec(design_path)
+    except JobSpecError as exc:
+        bad(f"design.json 不可用：{exc}")
+        print()
+        print("  模板（可复制到文件后按本份取舍修改）：")
+        for line in _design_template_text().splitlines():
+            print("      " + line)
+        return 2
+    print(f"  文件：{design_path}")
+    print(f"  范式：{design['paradigm']}")
+    print(f"  意图：{design['design_intent']}")
+    ok("已通过 validate_spec（ERROR 0）")
+
+    # --- 3. 渲染 + auto-fit + QA ---
+    head("3. 渲染 → auto-fit → QA")
+    try:
+        from resume_generator.fitting import FitError, fit
+    except ImportError:
+        bad("未安装 python-docx，无法渲染 DOCX：pip install python-docx")
+        return 2
+
+    out_path = (Path(args.out) if args.out
+                else resume_md.parent / f"{parsed.blocks.name or 'resume'}"
+                                        f"_简历.docx")
+    try:
+        result = fit(parsed.blocks, spec, out_path,
+                     allow_font_reduction=args.allow_font_reduction,
+                     on_step=lambda s: print("  · " + s.render()))
+    except FitError as exc:
+        bad(f"auto-fit 中止：{exc}")
+        return 1
+    except Exception as exc:                      # noqa: BLE001 - CLI 边界
+        bad(f"渲染失败：{exc}")
+        return 1
+
+    print()
+    print(result.render())
+    print()
+    if result.converged:
+        ok(f"成品已生成且达标：{out_path}")
+        return 0
+    if args.allow_overflow:
+        warn("成品已生成但**未达标**（--allow-overflow 已指定，不判失败）")
+        return 0
+    bad("成品已生成但**未达标**：请按上面的归因处理（通常是精简内容）"
+        "，或用 --allow-overflow 明确接受")
+    return 1
+
+
+# ============================================================================
 # 参数
 # ============================================================================
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="gen.py",
-        description="Resume-Agent 运维 / 校验 CLI（零依赖 / 零配置 / 跨平台）",
+        description="Resume-Agent 运维 / 校验 / 生成 CLI",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
@@ -330,6 +487,27 @@ def build_parser() -> argparse.ArgumentParser:
     p_ck = sub.add_parser("check-library",
                           help="校验简历库一致性（JD原文/JD分析/匹配分析/成品）")
     p_ck.set_defaults(func=cmd_check_library)
+
+    p_b = sub.add_parser(
+        "build",
+        help="一条命令：resume.md + design.json → 达标 DOCX（含 auto-fit 与 QA）",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=(
+            "从内容层 resume.md 与本份 design.json 生成达标 DOCX。\n"
+            "design.json 必须每份新建：缺文件直接拒绝（不套用上一份）。\n"
+            "需要 python-docx；有 Word/pywin32 时用 COM 实测页数。"))
+    p_b.add_argument("resume_md", help="resume.md 路径（或其所在目录）")
+    p_b.add_argument("--design", help="本份 design.json（默认取 resume.md 同目录）")
+    p_b.add_argument("--out", help="成品 DOCX 路径（默认 <姓名>_简历.docx）")
+    p_b.add_argument("--allow-font-reduction", action="store_true",
+                     help="允许 auto-fit 走「缩字号」档（默认禁止：正文不低于 9pt）")
+    p_b.add_argument("--allow-overflow", action="store_true",
+                     help="未达标时仍返回 0（默认返回 1，便于当门禁）")
+    p_b.add_argument("--write-design-template", action="store_true",
+                     help="只写出 design.json 模板后退出")
+    p_b.add_argument("--force", action="store_true",
+                     help="配合 --write-design-template：覆盖已存在的文件")
+    p_b.set_defaults(func=cmd_build)
 
     return parser
 
